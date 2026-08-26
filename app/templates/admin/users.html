@@ -1,0 +1,279 @@
+{% extends "admin/admin_base.html" %}
+
+{% block title %}User Directory — PocketPay Admin{% endblock %}
+{% block header_title %}User Management{% endblock %}
+
+{% block content %}
+<div class="admin-card">
+  <div class="admin-card-header">
+    <div class="admin-card-title">
+      <i data-lucide="users"></i>
+      All Registered Users
+    </div>
+    <div style="display:flex;gap:1rem;align-items:center;flex-wrap:wrap">
+      <!-- Search Input -->
+      <div class="admin-search-wrap">
+        <i data-lucide="search" class="admin-search-icon"></i>
+        <input type="text" id="userSearchInp" class="admin-search-input" placeholder="Search by name, email, phone…" oninput="onSearchUsers()">
+      </div>
+
+      <!-- Filter Buttons -->
+      <div style="display:flex;gap:0.4rem">
+        <button class="admin-btn admin-btn-sm admin-btn-primary" id="btnFilterAll" onclick="filterUsers('all')">All</button>
+        <button class="admin-btn admin-btn-sm admin-btn-ghost" id="btnFilterVerified" onclick="filterUsers('verified')">Verified</button>
+        <button class="admin-btn admin-btn-sm admin-btn-ghost" id="btnFilterPending" onclick="filterUsers('pending')">Pending</button>
+        <button class="admin-btn admin-btn-sm admin-btn-ghost" id="btnFilterSuspended" onclick="filterUsers('suspended')">Suspended</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="admin-table-container">
+    <table class="admin-table">
+      <thead>
+        <tr>
+          <th>User</th>
+          <th>Contact</th>
+          <th>Balance</th>
+          <th>Pockets</th>
+          <th>Status</th>
+          <th>Joined Date</th>
+          <th style="text-align:right">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="usersTableBody">
+        <tr>
+          <td colspan="7" style="text-align:center;padding:2rem">
+            <i data-lucide="loader-2" style="animation:spin 1s linear infinite;width:24px;height:24px;color:var(--admin-primary)"></i>
+            <div style="margin-top:8px;color:var(--admin-text-muted)">Loading live users from database…</div>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-top:0.5rem" id="paginationBar">
+    <div style="font-size:0.8rem;color:var(--admin-text-muted)" id="pageInfo">Showing 0 of 0 users</div>
+    <div style="display:flex;gap:0.5rem">
+      <button class="admin-btn admin-btn-sm admin-btn-ghost" id="btnPrevPage" onclick="changePage(-1)" disabled>Previous</button>
+      <button class="admin-btn admin-btn-sm admin-btn-ghost" id="btnNextPage" onclick="changePage(1)" disabled>Next</button>
+    </div>
+  </div>
+</div>
+
+<!-- User Detail Modal -->
+<div class="admin-modal-overlay" id="userDetailModal">
+  <div class="admin-modal">
+    <div class="admin-modal-header">
+      <div style="font-weight:800;font-size:1.1rem;color:#ffffff" id="modalUserName">User Profile</div>
+      <button class="admin-btn admin-btn-sm admin-btn-ghost" onclick="closeUserModal()">✕</button>
+    </div>
+    <div class="admin-modal-body" id="modalUserBody">
+      <!-- Injected by JS -->
+    </div>
+    <div class="admin-modal-footer">
+      <button class="admin-btn admin-btn-ghost" onclick="closeUserModal()">Close</button>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  let currentPage = 1;
+  let currentFilter = 'all';
+  let searchQuery = '';
+
+  async function loadUsers() {
+    const tbody = document.getElementById('usersTableBody');
+    try {
+      const url = `/admin/api/users?page=${currentPage}&status=${currentFilter}&q=${encodeURIComponent(searchQuery)}`;
+      const res = await fetch(url);
+      const json = await res.json();
+      
+      if (!json.success || !json.data) throw new Error(json.message || 'Failed to fetch');
+
+      const data = json.data;
+      const users = data.items || [];
+
+      document.getElementById('pageInfo').textContent = `Showing page ${data.page} of ${data.total_pages || 1} (${data.total_items} total users)`;
+      document.getElementById('btnPrevPage').disabled = !data.has_prev;
+      document.getElementById('btnNextPage').disabled = !data.has_next;
+
+      if (users.length === 0) {
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="7">
+              <div class="admin-empty-state">
+                <i data-lucide="users"></i>
+                <div>No users match your filter criteria.</div>
+              </div>
+            </td>
+          </tr>
+        `;
+        lucide.createIcons();
+        return;
+      }
+
+      tbody.innerHTML = users.map(u => `
+        <tr>
+          <td>
+            <div style="font-weight:700">${u.full_name}</div>
+            <div style="font-size:0.75rem;color:var(--admin-text-dim)">ID: ${u.uuid.substring(0, 8)}</div>
+          </td>
+          <td>
+            <div>${u.email}</div>
+            <div style="font-size:0.75rem;color:var(--admin-text-muted)">${u.phone || 'No phone'}</div>
+          </td>
+          <td>
+            <b style="color:var(--admin-primary)">₹${u.wallet_balance.toLocaleString('en-IN', {minimumFractionDigits: 2})}</b>
+          </td>
+          <td>
+            <span class="admin-chip info">${u.pockets_count} Pockets</span>
+          </td>
+          <td>
+            ${u.is_active ? 
+              (u.email_verified ? '<span class="admin-chip success">Verified</span>' : 
+               (u.otp_approval_status === 'pending_admin_approval' ? '<span class="admin-chip warning">Pending Approval</span>' : '<span class="admin-chip info">Registered</span>')) :
+              '<span class="admin-chip danger">Suspended</span>'
+            }
+          </td>
+          <td style="font-size:0.8rem;color:var(--admin-text-muted)">${u.created_at || '—'}</td>
+          <td style="text-align:right">
+            <div style="display:flex;gap:0.4rem;justify-content:flex-end">
+              <button class="admin-btn admin-btn-sm admin-btn-ghost" onclick="viewUserDetail(${u.id})">
+                <i data-lucide="eye"></i> Details
+              </button>
+              <button class="admin-btn admin-btn-sm ${u.is_active ? 'admin-btn-danger' : 'admin-btn-success'}" onclick="toggleUserStatus(${u.id}, '${u.full_name}', ${u.is_active})">
+                ${u.is_active ? 'Suspend' : 'Activate'}
+              </button>
+            </div>
+          </td>
+        </tr>
+      `).join('');
+
+      lucide.createIcons();
+    } catch (e) {
+      tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--admin-danger);padding:2rem">${e.message}</td></tr>`;
+    }
+  }
+
+  function filterUsers(status) {
+    currentFilter = status;
+    currentPage = 1;
+    ['btnFilterAll', 'btnFilterVerified', 'btnFilterPending', 'btnFilterSuspended'].forEach(id => {
+      document.getElementById(id).className = 'admin-btn admin-btn-sm admin-btn-ghost';
+    });
+    if (status === 'all') document.getElementById('btnFilterAll').className = 'admin-btn admin-btn-sm admin-btn-primary';
+    if (status === 'verified') document.getElementById('btnFilterVerified').className = 'admin-btn admin-btn-sm admin-btn-primary';
+    if (status === 'pending') document.getElementById('btnFilterPending').className = 'admin-btn admin-btn-sm admin-btn-primary';
+    if (status === 'suspended') document.getElementById('btnFilterSuspended').className = 'admin-btn admin-btn-sm admin-btn-primary';
+    loadUsers();
+  }
+
+  let searchTimeout = null;
+  function onSearchUsers() {
+    clearTimeout(searchTimeout);
+    searchTimeout = setTimeout(() => {
+      searchQuery = document.getElementById('userSearchInp').value.trim();
+      currentPage = 1;
+      loadUsers();
+    }, 250);
+  }
+
+  function changePage(delta) {
+    currentPage += delta;
+    loadUsers();
+  }
+
+  async function toggleUserStatus(userId, name, currentActive) {
+    const action = currentActive ? 'SUSPEND' : 'ACTIVATE';
+    if (!confirm(`Are you sure you want to ${action} user ${name}?`)) return;
+    try {
+      const res = await fetch(`/admin/api/users/${userId}/toggle-status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to update status');
+      showAdminToast('Status Updated', data.message, 'success');
+      loadUsers();
+    } catch (e) {
+      showAdminToast('Error', e.message, 'error');
+    }
+  }
+
+  async function viewUserDetail(userId) {
+    const modal = document.getElementById('userDetailModal');
+    const body = document.getElementById('modalUserBody');
+    body.innerHTML = '<div style="text-align:center;padding:2rem"><i data-lucide="loader-2" style="animation:spin 1s linear infinite"></i> Loading...</div>';
+    modal.style.display = 'flex';
+    lucide.createIcons();
+
+    try {
+      const res = await fetch(`/admin/api/users/${userId}`);
+      const json = await res.json();
+      if (!json.success || !json.data) throw new Error(json.message || 'User details error');
+
+      const u = json.data;
+      document.getElementById('modalUserName').textContent = u.full_name;
+
+      body.innerHTML = `
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;background:rgba(255,255,255,0.02);border:1px solid var(--admin-border);padding:1rem;border-radius:12px">
+          <div><div style="font-size:0.75rem;color:var(--admin-text-muted)">EMAIL</div><b>${u.email}</b></div>
+          <div><div style="font-size:0.75rem;color:var(--admin-text-muted)">PHONE</div><b>${u.phone || '—'}</b></div>
+          <div><div style="font-size:0.75rem;color:var(--admin-text-muted)">WALLET BALANCE</div><b style="color:var(--admin-primary)">₹${u.wallet_balance.toFixed(2)}</b></div>
+          <div><div style="font-size:0.75rem;color:var(--admin-text-muted)">STATUS</div><b>${u.is_active ? 'Active' : 'Suspended'}</b></div>
+          <div><div style="font-size:0.75rem;color:var(--admin-text-muted)">2FA (TOTP)</div><b>${u.totp_enabled ? 'Enabled ✓' : 'Disabled'}</b></div>
+          <div><div style="font-size:0.75rem;color:var(--admin-text-muted)">TRANSACTION PIN</div><b>${u.has_pin ? 'Configured ✓' : 'Not Set'}</b></div>
+          <div><div style="font-size:0.75rem;color:var(--admin-text-muted)">VIRTUAL WALLET</div><code>${u.virtual_wallet_id || '—'}</code></div>
+          <div><div style="font-size:0.75rem;color:var(--admin-text-muted)">VIRTUAL UPI</div><code>${u.virtual_upi_id || '—'}</code></div>
+        </div>
+
+        <div>
+          <div style="font-weight:700;font-size:0.9rem;margin-bottom:0.5rem">Smart Pockets (${(u.pockets || []).length})</div>
+          ${(u.pockets || []).length === 0 ? '<div style="font-size:0.8rem;color:var(--admin-text-muted)">No pockets created yet.</div>' : `
+            <div style="display:flex;flex-direction:column;gap:0.35rem">
+              ${u.pockets.map(p => `
+                <div style="display:flex;justify-content:space-between;padding:0.5rem 0.75rem;background:rgba(255,255,255,0.03);border-radius:8px;font-size:0.85rem">
+                  <span>📁 <b>${p.name}</b></span>
+                  <span style="font-weight:700;color:var(--admin-success)">₹${p.current_balance.toFixed(2)}</span>
+                </div>
+              `).join('')}
+            </div>
+          `}
+        </div>
+
+        <div>
+          <div style="font-weight:700;font-size:0.9rem;margin-bottom:0.5rem">Recent Transactions (${(u.recent_transactions || []).length})</div>
+          ${(u.recent_transactions || []).length === 0 ? '<div style="font-size:0.8rem;color:var(--admin-text-muted)">No transactions yet.</div>' : `
+            <div style="display:flex;flex-direction:column;gap:0.35rem">
+              ${u.recent_transactions.slice(0, 5).map(t => `
+                <div style="display:flex;justify-content:space-between;padding:0.5rem 0.75rem;background:rgba(255,255,255,0.03);border-radius:8px;font-size:0.82rem">
+                  <div>
+                    <div style="font-weight:700">${t.transaction_id}</div>
+                    <div style="font-size:0.72rem;color:var(--admin-text-muted)">${t.type} &bull; ${t.created_at}</div>
+                  </div>
+                  <div style="font-weight:800;color:${t.type === 'income' || t.type === 'topup' ? 'var(--admin-success)' : '#ffffff'}">
+                    ₹${t.amount.toFixed(2)}
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+          `}
+        </div>
+      `;
+      lucide.createIcons();
+    } catch (e) {
+      body.innerHTML = `<div style="color:var(--admin-danger);padding:1rem">${e.message}</div>`;
+    }
+  }
+
+  function closeUserModal() {
+    document.getElementById('userDetailModal').style.display = 'none';
+  }
+
+  window.onAdminRefresh = loadUsers;
+  document.addEventListener('DOMContentLoaded', loadUsers);
+</script>
+{% endblock %}

@@ -1,0 +1,132 @@
+{% extends "admin/admin_base.html" %}
+
+{% block title %}Approvals Queue — PocketPay Admin{% endblock %}
+{% block header_title %}Pending Registration & OTP Approvals{% endblock %}
+
+{% block content %}
+<div class="admin-card">
+  <div class="admin-card-header">
+    <div class="admin-card-title" style="color:#fbbf24">
+      <i data-lucide="user-check"></i>
+      Pending Admin Approvals (<span id="approvalsCount">{{ (pending_users or [])|length }}</span>)
+    </div>
+    <div style="font-size:0.85rem;color:var(--admin-text-muted)">
+      Approving a user immediately generates a 6-digit OTP and dispatches it to their registered email.
+    </div>
+  </div>
+
+  <div class="admin-table-container">
+    <table class="admin-table">
+      <thead>
+        <tr>
+          <th>User Full Name</th>
+          <th>Registered Email</th>
+          <th>Phone</th>
+          <th>Requested Time</th>
+          <th>Status</th>
+          <th style="text-align:right">Approval Actions</th>
+        </tr>
+      </thead>
+      <tbody id="approvalsTableBody">
+        {% if pending_users and pending_users|length > 0 %}
+          {% for u in pending_users %}
+          <tr id="apprRow{{ u.id }}">
+            <td>
+              <div style="font-weight:700">{{ u.full_name }}</div>
+              <div style="font-size:0.75rem;color:var(--admin-text-dim)">UUID: {{ u.uuid }}</div>
+            </td>
+            <td>
+              <b>{{ u.email }}</b>
+            </td>
+            <td>{{ u.phone or '—' }}</td>
+            <td style="font-size:0.8rem;color:var(--admin-text-muted)">{{ u.created_at }}</td>
+            <td>
+              <span class="admin-chip warning">Pending Approval</span>
+            </td>
+            <td style="text-align:right">
+              <div style="display:flex;gap:0.5rem;justify-content:flex-end">
+                <button class="admin-btn admin-btn-sm admin-btn-success" onclick="approveAppr({{ u.id }}, '{{ u.email }}')">
+                  <i data-lucide="check"></i> Approve & Send OTP
+                </button>
+                <button class="admin-btn admin-btn-sm admin-btn-danger" onclick="rejectAppr({{ u.id }}, '{{ u.email }}')">
+                  <i data-lucide="x"></i> Reject
+                </button>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        {% else %}
+          <tr>
+            <td colspan="6">
+              <div class="admin-empty-state">
+                <i data-lucide="check-circle" style="color:var(--admin-success)"></i>
+                <div style="font-size:1.1rem;font-weight:700;color:#ffffff">All Caught Up!</div>
+                <div>There are currently no registration or OTP verification requests pending approval.</div>
+              </div>
+            </td>
+          </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  async function approveAppr(userId, email) {
+    if (!confirm(`Approve registration for ${email}? A 6-digit OTP will be dispatched to their inbox.`)) return;
+    try {
+      const res = await fetch(`/admin/api/approvals/${userId}/approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Approval failed');
+      showAdminToast('Approved', data.message, 'success');
+      const row = document.getElementById(`apprRow${userId}`);
+      if (row) row.remove();
+      updateCount();
+    } catch (e) {
+      showAdminToast('Error', e.message, 'error');
+    }
+  }
+
+  async function rejectAppr(userId, email) {
+    if (!confirm(`Reject registration request for ${email}?`)) return;
+    try {
+      const res = await fetch(`/admin/api/approvals/${userId}/reject`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Rejection failed');
+      showAdminToast('Rejected', data.message, 'warning');
+      const row = document.getElementById(`apprRow${userId}`);
+      if (row) row.remove();
+      updateCount();
+    } catch (e) {
+      showAdminToast('Error', e.message, 'error');
+    }
+  }
+
+  function updateCount() {
+    const rows = document.querySelectorAll('#approvalsTableBody tr[id^="apprRow"]');
+    document.getElementById('approvalsCount').textContent = rows.length;
+    if (rows.length === 0) {
+      document.getElementById('approvalsTableBody').innerHTML = `
+        <tr>
+          <td colspan="6">
+            <div class="admin-empty-state">
+              <i data-lucide="check-circle" style="color:var(--admin-success)"></i>
+              <div style="font-size:1.1rem;font-weight:700;color:#ffffff">All Caught Up!</div>
+              <div>There are currently no registration requests pending approval.</div>
+            </div>
+          </td>
+        </tr>
+      `;
+      lucide.createIcons();
+    }
+  }
+</script>
+{% endblock %}

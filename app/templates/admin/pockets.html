@@ -1,0 +1,134 @@
+{% extends "admin/admin_base.html" %}
+
+{% block title %}Smart Pockets — PocketPay Admin{% endblock %}
+{% block header_title %}Platform Smart Pockets Ledger (Read-Only){% endblock %}
+
+{% block content %}
+<div class="admin-card">
+  <div class="admin-card-header">
+    <div class="admin-card-title">
+      <i data-lucide="folder-kanban"></i>
+      All Active User Pockets
+    </div>
+    <div class="admin-search-wrap">
+      <i data-lucide="search" class="admin-search-icon"></i>
+      <input type="text" id="pocketSearchInp" class="admin-search-input" placeholder="Search by pocket name…" oninput="onSearchPockets()">
+    </div>
+  </div>
+
+  <div class="admin-table-container">
+    <table class="admin-table">
+      <thead>
+        <tr>
+          <th>Pocket Name</th>
+          <th>Owner</th>
+          <th>Current Balance</th>
+          <th>Monthly Budget</th>
+          <th>Total Spent</th>
+          <th>Total Received</th>
+          <th>Created Date</th>
+        </tr>
+      </thead>
+      <tbody id="pocketsTableBody">
+        <tr>
+          <td colspan="7" style="text-align:center;padding:2rem">
+            <i data-lucide="loader-2" style="animation:spin 1s linear infinite;width:24px;height:24px;color:var(--admin-primary)"></i>
+            <div style="margin-top:8px;color:var(--admin-text-muted)">Loading platform pockets from database…</div>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-top:0.5rem">
+    <div style="font-size:0.8rem;color:var(--admin-text-muted)" id="pocketsPageInfo">Showing 0 of 0 pockets</div>
+    <div style="display:flex;gap:0.5rem">
+      <button class="admin-btn admin-btn-sm admin-btn-ghost" id="btnPrevPockets" onclick="changePocketsPage(-1)" disabled>Previous</button>
+      <button class="admin-btn admin-btn-sm admin-btn-ghost" id="btnNextPockets" onclick="changePocketsPage(1)" disabled>Next</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  let pocketPage = 1;
+  let pocketSearch = '';
+
+  async function loadPockets() {
+    const tbody = document.getElementById('pocketsTableBody');
+    try {
+      const url = `/admin/api/pockets?page=${pocketPage}&q=${encodeURIComponent(pocketSearch)}`;
+      const res = await fetch(url);
+      const json = await res.json();
+      if (!json.success || !json.data) throw new Error(json.message || 'Failed to load pockets');
+
+      const data = json.data;
+      const pockets = data.items || [];
+
+      document.getElementById('pocketsPageInfo').textContent = `Showing page ${data.page} of ${data.total_pages || 1} (${data.total_items} total pockets)`;
+      document.getElementById('btnPrevPockets').disabled = !data.has_prev;
+      document.getElementById('btnNextPockets').disabled = !data.has_next;
+
+      if (pockets.length === 0) {
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="7">
+              <div class="admin-empty-state">
+                <i data-lucide="folder"></i>
+                <div>No pockets found.</div>
+              </div>
+            </td>
+          </tr>
+        `;
+        lucide.createIcons();
+        return;
+      }
+
+      tbody.innerHTML = pockets.map(p => `
+        <tr>
+          <td>
+            <div style="display:flex;align-items:center;gap:0.6rem">
+              <div style="width:12px;height:12px;border-radius:50%;background:${p.color || '#6366f1'}"></div>
+              <b>${p.name}</b>
+            </div>
+          </td>
+          <td>
+            <div style="font-weight:600">${p.user_name}</div>
+            <div style="font-size:0.75rem;color:var(--admin-text-muted)">${p.user_email}</div>
+          </td>
+          <td>
+            <b style="color:var(--admin-success)">₹${p.current_balance.toLocaleString('en-IN', {minimumFractionDigits: 2})}</b>
+          </td>
+          <td>₹${(p.budget_amount || 0).toLocaleString('en-IN', {minimumFractionDigits: 2})}</td>
+          <td style="color:var(--admin-text-muted)">₹${(p.total_spent || 0).toFixed(2)}</td>
+          <td style="color:var(--admin-text-muted)">₹${(p.total_received || 0).toFixed(2)}</td>
+          <td style="font-size:0.8rem;color:var(--admin-text-muted)">${p.created_at || '—'}</td>
+        </tr>
+      `).join('');
+
+      lucide.createIcons();
+    } catch (e) {
+      tbody.innerHTML = `<tr><td colspan="7" style="color:var(--admin-danger);text-align:center;padding:1.5rem">${e.message}</td></tr>`;
+    }
+  }
+
+  let pocketSearchTimer = null;
+  function onSearchPockets() {
+    clearTimeout(pocketSearchTimer);
+    pocketSearchTimer = setTimeout(() => {
+      pocketSearch = document.getElementById('pocketSearchInp').value.trim();
+      pocketPage = 1;
+      loadPockets();
+    }, 250);
+  }
+
+  function changePocketsPage(delta) {
+    pocketPage += delta;
+    loadPockets();
+  }
+
+  window.onAdminRefresh = loadPockets;
+  document.addEventListener('DOMContentLoaded', loadPockets);
+</script>
+{% endblock %}

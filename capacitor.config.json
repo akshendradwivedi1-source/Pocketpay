@@ -1,0 +1,21 @@
+{
+  "appId": "com.pocketpay.app",
+  "appName": "PocketPay",
+  "webDir": "app/static",
+  "bundledWebRuntime": false,
+  "server": {
+    "url": "http://localhost:5000",
+    "cleartext": true
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 1500,
+      "backgroundColor": "#0a0b14",
+      "showSpinner": false
+    },
+    "StatusBar": {
+      "style": "DARK",
+      "backgroundColor": "#0a0b14"
+    }
+  }
+}

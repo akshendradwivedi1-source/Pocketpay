@@ -1,0 +1,119 @@
+{% extends "admin/admin_base.html" %}
+
+{% block title %}Audit Logs — PocketPay Admin{% endblock %}
+{% block header_title %}Admin Actions Audit Trail (Immutable Log){% endblock %}
+
+{% block content %}
+<div class="admin-card">
+  <div class="admin-card-header">
+    <div class="admin-card-title">
+      <i data-lucide="file-clock"></i>
+      Administrative Action History
+    </div>
+    <div style="font-size:0.85rem;color:var(--admin-text-muted)">
+      Every approval, rejection, status change, and critical action is recorded with IP and timestamp.
+    </div>
+  </div>
+
+  <div class="admin-table-container">
+    <table class="admin-table">
+      <thead>
+        <tr>
+          <th>Timestamp</th>
+          <th>Admin</th>
+          <th>Action</th>
+          <th>Target</th>
+          <th>Details</th>
+          <th>IP Address</th>
+        </tr>
+      </thead>
+      <tbody id="logsTableBody">
+        <tr>
+          <td colspan="6" style="text-align:center;padding:2rem">
+            <i data-lucide="loader-2" style="animation:spin 1s linear infinite;width:24px;height:24px;color:var(--admin-primary)"></i>
+            <div style="margin-top:8px;color:var(--admin-text-muted)">Loading audit history…</div>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-top:0.5rem">
+    <div style="font-size:0.8rem;color:var(--admin-text-muted)" id="logsPageInfo">Showing 0 of 0 logs</div>
+    <div style="display:flex;gap:0.5rem">
+      <button class="admin-btn admin-btn-sm admin-btn-ghost" id="btnPrevLogs" onclick="changeLogsPage(-1)" disabled>Previous</button>
+      <button class="admin-btn admin-btn-sm admin-btn-ghost" id="btnNextLogs" onclick="changeLogsPage(1)" disabled>Next</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  let logPage = 1;
+
+  async function loadLogs() {
+    const tbody = document.getElementById('logsTableBody');
+    try {
+      const res = await fetch(`/admin/api/audit-logs?page=${logPage}`);
+      const json = await res.json();
+      if (!json.success || !json.data) throw new Error(json.message || 'Failed to load logs');
+
+      const data = json.data;
+      const logs = data.items || [];
+
+      document.getElementById('logsPageInfo').textContent = `Showing page ${data.page} of ${data.total_pages || 1} (${data.total_items} total log entries)`;
+      document.getElementById('btnPrevLogs').disabled = !data.has_prev;
+      document.getElementById('btnNextLogs').disabled = !data.has_next;
+
+      if (logs.length === 0) {
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="6">
+              <div class="admin-empty-state">
+                <i data-lucide="file-clock"></i>
+                <div>No admin actions recorded yet.</div>
+              </div>
+            </td>
+          </tr>
+        `;
+        lucide.createIcons();
+        return;
+      }
+
+      tbody.innerHTML = logs.map(l => `
+        <tr>
+          <td style="font-size:0.8rem;color:var(--admin-text-muted);font-family:var(--admin-mono)">${l.created_at || '—'}</td>
+          <td><b>${l.admin_email}</b></td>
+          <td>
+            <span class="admin-chip ${l.action.includes('approve') || l.action.includes('activate') ? 'success' : (l.action.includes('reject') || l.action.includes('suspend') ? 'danger' : 'info')}">
+              ${l.action.replace('_', ' ').toUpperCase()}
+            </span>
+          </td>
+          <td>
+            <div style="font-size:0.85rem">${l.target_type || '—'}: <code>${l.target_id || '—'}</code></div>
+          </td>
+          <td>
+            <div style="font-size:0.75rem;color:var(--admin-text-muted);font-family:var(--admin-mono)">${JSON.stringify(l.details || {})}</div>
+          </td>
+          <td>
+            <code style="font-size:0.8rem">${l.ip_address || '127.0.0.1'}</code>
+          </td>
+        </tr>
+      `).join('');
+
+      lucide.createIcons();
+    } catch (e) {
+      tbody.innerHTML = `<tr><td colspan="6" style="color:var(--admin-danger);text-align:center;padding:1.5rem">${e.message}</td></tr>`;
+    }
+  }
+
+  function changeLogsPage(delta) {
+    logPage += delta;
+    loadLogs();
+  }
+
+  window.onAdminRefresh = loadLogs;
+  document.addEventListener('DOMContentLoaded', loadLogs);
+</script>
+{% endblock %}

@@ -1,0 +1,126 @@
+from datetime import datetime
+from app.extensions import db
+
+
+class Pocket(db.Model):
+    __tablename__ = 'pockets'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    
+    name = db.Column(db.String(100), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    color = db.Column(db.String(50), default='#6366f1')
+    icon = db.Column(db.String(50), default='wallet')
+    icon_type = db.Column(db.String(20), default='lucide')
+    
+    budget_amount = db.Column(db.Float, default=0.0)
+    monthly_limit = db.Column(db.Float, default=0.0)
+    priority = db.Column(db.Integer, default=0)
+    sort_order = db.Column(db.Integer, default=0)
+    
+    current_balance = db.Column(db.Float, default=0.0)
+    total_received = db.Column(db.Float, default=0.0)
+    total_spent = db.Column(db.Float, default=0.0)
+    
+    archived = db.Column(db.Boolean, default=False)
+    archived_at = db.Column(db.DateTime, nullable=True)
+    
+    spending_rules = db.Column(db.JSON, default=dict)
+    
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    user = db.relationship('User', back_populates='pockets')
+    transactions_from = db.relationship('Transaction', foreign_keys='Transaction.from_pocket_id',
+                                         back_populates='from_pocket', cascade='all, delete-orphan')
+    transactions_to = db.relationship('Transaction', foreign_keys='Transaction.to_pocket_id',
+                                       back_populates='to_pocket', cascade='all, delete-orphan')
+    budgets = db.relationship('Budget', back_populates='pocket', cascade='all, delete-orphan')
+    
+    __table_args__ = (db.Index('ix_user_pocket_sort', 'user_id', 'sort_order'),)
+    
+    def add_money(self, amount):
+        if amount <= 0:
+            raise ValueError('Amount must be positive')
+        self.current_balance = round(self.current_balance + amount, 2)
+        self.total_received = round(self.total_received + amount, 2)
+        db.session.commit()
+    
+    def deduct_money(self, amount):
+        if amount <= 0:
+            raise ValueError('Amount must be positive')
+        if self.current_balance < amount:
+            raise ValueError('Insufficient balance')
+        self.current_balance = round(self.current_balance - amount, 2)
+        self.total_spent = round(self.total_spent + amount, 2)
+        db.session.commit()
+    
+    def can_afford(self, amount):
+        return self.current_balance >= amount
+    
+    def monthly_spending(self, year=None, month=None):
+        from datetime import datetime
+        from sqlalchemy import and_, or_
+        if year is None:
+            year = datetime.utcnow().year
+        if month is None:
+            month = datetime.utcnow().month
+        start = datetime(year, month, 1)
+        if month == 12:
+            end = datetime(year + 1, 1, 1)
+        else:
+            end = datetime(year, month + 1, 1)
+        from app.models.transaction import Transaction
+        spent = db.session.query(db.func.sum(Transaction.amount)).filter(
+            Transaction.from_pocket_id == self.id,
+            Transaction.type == 'expense',
+            Transaction.created_at >= start,
+            Transaction.created_at < end
+        ).scalar() or 0.0
+        return spent
+    
+    def budget_usage_percent(self):
+        if self.budget_amount and self.budget_amount > 0:
+            return min(100, (self.total_spent / self.budget_amount) * 100)
+        if self.monthly_limit and self.monthly_limit > 0:
+            spent = self.monthly_spending()
+            return min(100, (spent / self.monthly_limit) * 100)
+        return 0
+    
+    def archive(self):
+        self.archived = True
+        self.archived_at = datetime.utcnow()
+        db.session.commit()
+    
+    def restore(self):
+        self.archived = False
+        self.archived_at = None
+        db.session.commit()
+    
+    def to_dict(self, include_stats=False):
+        data = {
+            'id': self.id,
+            'user_id': self.user_id,
+            'name': self.name,
+            'description': self.description,
+            'color': self.color,
+            'icon': self.icon,
+            'icon_type': self.icon_type,
+            'budget_amount': self.budget_amount,
+            'monthly_limit': self.monthly_limit,
+            'priority': self.priority,
+            'sort_order': self.sort_order,
+            'current_balance': self.current_balance,
+            'total_received': self.total_received,
+            'total_spent': self.total_spent,
+            'archived': self.archived,
+            'archived_at': self.archived_at.isoformat() if self.archived_at else None,
+            'spending_rules': self.spending_rules or {},
+            'budget_usage_percent': self.budget_usage_percent(),
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+        if include_stats:
+            data['monthly_spending'] = self.monthly_spending()
+        return data

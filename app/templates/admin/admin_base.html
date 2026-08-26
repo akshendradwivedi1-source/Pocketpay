@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}PocketPay Admin Panel{% endblock %}</title>
+  
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+  
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  
+  <!-- Admin Stylesheet -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/admin.css') }}">
+</head>
+<body class="admin-body">
+
+  <!-- Admin Sidebar -->
+  <aside class="admin-sidebar">
+    <div class="admin-brand">
+      <div class="admin-logo">
+        <i data-lucide="shield-check" style="color:var(--admin-primary);width:26px;height:26px"></i>
+        Pocket<span>Pay</span>
+      </div>
+      <div class="admin-badge">Admin</div>
+    </div>
+
+    <nav class="admin-nav">
+      <a href="{{ url_for('admin.dashboard') }}" class="admin-nav-item {% if active_page == 'dashboard' %}active{% endif %}">
+        <i data-lucide="layout-dashboard"></i>
+        <span>Dashboard</span>
+      </a>
+      <a href="{{ url_for('admin.approvals') }}" class="admin-nav-item {% if active_page == 'approvals' %}active{% endif %}">
+        <i data-lucide="user-check"></i>
+        <span>Approvals Queue</span>
+        {% if metrics and metrics.pending_approvals > 0 %}
+          <span class="badge-count">{{ metrics.pending_approvals }}</span>
+        {% endif %}
+      </a>
+      <a href="{{ url_for('admin.users') }}" class="admin-nav-item {% if active_page == 'users' %}active{% endif %}">
+        <i data-lucide="users"></i>
+        <span>User Directory</span>
+      </a>
+      <a href="{{ url_for('admin.pockets') }}" class="admin-nav-item {% if active_page == 'pockets' %}active{% endif %}">
+        <i data-lucide="folder-kanban"></i>
+        <span>Smart Pockets</span>
+      </a>
+      <a href="{{ url_for('admin.transactions') }}" class="admin-nav-item {% if active_page == 'transactions' %}active{% endif %}">
+        <i data-lucide="arrow-left-right"></i>
+        <span>Transactions Ledger</span>
+      </a>
+      <a href="{{ url_for('admin.audit_logs') }}" class="admin-nav-item {% if active_page == 'audit_logs' %}active{% endif %}">
+        <i data-lucide="file-clock"></i>
+        <span>Admin Audit Logs</span>
+      </a>
+    </nav>
+
+    <div class="admin-sidebar-footer">
+      <a href="{{ url_for('main.index') }}" class="admin-btn admin-btn-ghost" style="width:100%">
+        <i data-lucide="external-link"></i>
+        <span>Switch to User App</span>
+      </a>
+      <a href="{{ url_for('auth.logout') }}" class="admin-btn admin-btn-ghost" style="width:100%;color:var(--admin-danger)">
+        <i data-lucide="log-out"></i>
+        <span>Sign Out</span>
+      </a>
+    </div>
+  </aside>
+
+  <!-- Main Content Wrapper -->
+  <div class="admin-main">
+    <!-- Header -->
+    <header class="admin-header">
+      <div class="admin-header-title">
+        {% block header_title %}Admin Control Center{% endblock %}
+      </div>
+      <div class="admin-header-actions">
+        <div class="admin-user-pill">
+          <i data-lucide="shield" style="width:14px;height:14px;color:var(--admin-primary)"></i>
+          <span><b>Admin:</b> {{ admin_email }}</span>
+        </div>
+        <button class="admin-btn admin-btn-ghost admin-btn-sm" onclick="refreshAdminData()" title="Refresh Live Data">
+          <i data-lucide="refresh-cw" id="refreshIcon"></i>
+          <span>Refresh</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Page Content -->
+    <main class="admin-content">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div class="admin-toast-container" id="adminToastContainer"></div>
+
+  <!-- Universal Admin Scripts -->
+  <script>
+    lucide.createIcons();
+
+    function showAdminToast(title, message = '', type = 'info') {
+      const container = document.getElementById('adminToastContainer');
+      if (!container) return;
+      const toast = document.createElement('div');
+      toast.className = 'admin-toast';
+      if (type === 'success') toast.style.borderLeftColor = 'var(--admin-success)';
+      if (type === 'error') toast.style.borderLeftColor = 'var(--admin-danger)';
+      if (type === 'warning') toast.style.borderLeftColor = 'var(--admin-warning)';
+      
+      toast.innerHTML = `
+        <div style="flex:1">
+          <div style="font-weight:700">${title}</div>
+          ${message ? `<div style="font-size:0.78rem;color:var(--admin-text-muted);margin-top:2px">${message}</div>` : ''}
+        </div>
+      `;
+      container.appendChild(toast);
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateX(100%)';
+        toast.style.transition = 'all 0.3s ease';
+        setTimeout(() => toast.remove(), 300);
+      }, 4000);
+    }
+
+    async function refreshAdminData() {
+      const icon = document.getElementById('refreshIcon');
+      if (icon) icon.style.animation = 'spin 1s linear infinite';
+      try {
+        if (typeof window.onAdminRefresh === 'function') {
+          await window.onAdminRefresh();
+        } else {
+          window.location.reload();
+        }
+        showAdminToast('Refreshed', 'Live database stats synchronized', 'success');
+      } catch (e) {
+        showAdminToast('Error', e.message, 'error');
+      } finally {
+        if (icon) icon.style.animation = 'none';
+      }
+    }
+  </script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

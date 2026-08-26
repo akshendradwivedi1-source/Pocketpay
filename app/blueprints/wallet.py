@@ -1,0 +1,573 @@
+from flask import Blueprint, request
+from flask_login import current_user
+from datetime import datetime
+from app.extensions import db
+from app.models.user import User
+from app.models.pocket import Pocket
+from app.models.transaction import Transaction, EXPENSE_CATEGORIES
+from app.models.distribution_rule import DistributionRule
+from app.models.notification import Notification
+from app.utils.helpers import (
+    json_response, error_response, validate_required_fields,
+    api_login_required, get_paginated_query, paginated_response, generate_qr_code
+)
+
+bp = Blueprint('wallet', __name__)
+
+
+@bp.route('/balance', methods=['GET'])
+@api_login_required
+def get_wallet_balance():
+    pockets = Pocket.query.filter_by(user_id=current_user.id, archived=False).all()
+    pocket_balance = sum(p.current_balance for p in pockets)
+    wallet_balance = current_user.wallet_balance
+    
+    month_income = db.session.query(db.func.sum(Transaction.amount))\
+        .filter(
+            Transaction.user_id == current_user.id,
+            Transaction.type.in_(['income', 'topup']),
+            db.func.strftime('%Y-%m', Transaction.created_at) == datetime.utcnow().strftime('%Y-%m')
+        ).scalar() or 0
+    
+    month_expense = db.session.query(db.func.sum(Transaction.amount))\
+        .filter(
+            Transaction.user_id == current_user.id,
+            Transaction.type == 'expense',
+            db.func.strftime('%Y-%m', Transaction.created_at) == datetime.utcnow().strftime('%Y-%m')
+        ).scalar() or 0
+    
+    return json_response({
+        'wallet_balance': wallet_balance,
+        'pocket_balance': pocket_balance,
+        'total_balance': wallet_balance + pocket_balance,
+        'total_pockets': len(pockets),
+        'monthly_income': month_income,
+        'monthly_expense': month_expense,
+        'net_monthly_savings': month_income - month_expense,
+        'virtual_wallet_id': current_user.virtual_wallet_id,
+        'virtual_upi_id': current_user.virtual_upi_id,
+    })
+
+
+@bp.route('/topup', methods=['POST'])
+@api_login_required
+def wallet_topup():
+    data = request.get_json() or {}
+    valid, msg = validate_required_fields(data, ['amount'])
+    if not valid:
+        return error_response(msg, 400)
+    
+    amount = float(data.get('amount', 0))
+    if amount <= 0:
+        return error_response('Amount must be positive', 400)
+    
+    payment_method = data.get('payment_method', 'upi')
+    upi_ref = data.get('upi_reference') or f'UPI{datetime.utcnow().strftime("%Y%m%d%H%M%S")}'
+    
+    current_user.wallet_balance += amount
+    db.session.commit()
+    
+    tx = Transaction(
+        transaction_id=Transaction.generate_transaction_id(),
+        user_id=current_user.id,
+        type='topup',
+        amount=amount,
+        category='Wallet Top-up',
+        description=f'Wallet topped up via {payment_method}',
+        payment_method=payment_method,
+        upi_reference=upi_ref
+    )
+    db.session.add(tx)
+    tx.complete()
+    
+    qr_data = f'pocketpay://tx/{tx.transaction_id}'
+    tx.qr_code_url = generate_qr_code(qr_data, 200)
+    db.session.commit()
+    
+    Notification.transaction_alert(current_user.id, tx)
+    
+    return json_response({
+        'transaction': tx.to_dict(),
+        'new_balance': current_user.wallet_balance,
+        'qr_code_url': tx.qr_code_url
+    }, f'₹{amount:.2f} added to wallet successfully', 201)
+
+
+@bp.route('/income/distribute/preview', methods=['POST'])
+@api_login_required
+def preview_income_distribution():
+    data = request.get_json() or {}
+    valid, msg = validate_required_fields(data, ['total_amount', 'strategy'])
+    if not valid:
+        return error_response(msg, 400)
+    
+    total_amount = float(data.get('total_amount', 0))
+    if total_amount <= 0:
+        return error_response('Amount must be positive', 400)
+    
+    strategy = data.get('strategy')
+    allocations = []
+    summary = {
+        'total_amount': total_amount,
+        'total_allocated': 0,
+        'remaining': total_amount,
+        'strategy': strategy,
+    }
+    
+    if strategy == 'single':
+        pocket_id = data.get('pocket_id')
+        if not pocket_id:
+            return error_response('pocket_id required for single pocket strategy', 400)
+        pocket = Pocket.query.filter_by(id=pocket_id, user_id=current_user.id, archived=False).first()
+        if not pocket:
+            return error_response('Pocket not found', 404)
+        allocations = [{
+            'pocket_id': pocket.id,
+            'pocket_name': pocket.name,
+            'pocket_color': pocket.color,
+            'pocket_icon': pocket.icon,
+            'amount': total_amount,
+            'percentage': 100
+        }]
+        summary['total_allocated'] = total_amount
+        summary['remaining'] = 0
+        
+    elif strategy == 'percentage':
+        splits = data.get('splits', [])
+        if not splits:
+            return error_response('splits array required for percentage strategy', 400)
+        
+        total_pct = 0
+        remaining_amount = total_amount
+        
+        for i, split in enumerate(splits):
+            pocket_id = split.get('pocket_id')
+            pct = float(split.get('percentage', 0))
+            pocket = Pocket.query.filter_by(id=pocket_id, user_id=current_user.id, archived=False).first()
+            if not pocket:
+                return error_response(f'Pocket {pocket_id} not found', 404)
+            amount = round(total_amount * pct / 100, 2)
+            if i == len(splits) - 1:
+                amount = round(remaining_amount, 2)
+            remaining_amount = round(remaining_amount - amount, 2)
+            total_pct += pct
+            allocations.append({
+                'pocket_id': pocket.id,
+                'pocket_name': pocket.name,
+                'pocket_color': pocket.color,
+                'pocket_icon': pocket.icon,
+                'amount': amount,
+                'percentage': pct
+            })
+        
+        summary['total_allocated'] = round(total_amount - remaining_amount, 2)
+        summary['remaining'] = remaining_amount
+        summary['total_percentage'] = total_pct
+        
+    elif strategy == 'fixed':
+        splits = data.get('splits', [])
+        if not splits:
+            return error_response('splits array required for fixed strategy', 400)
+        
+        total_fixed = 0
+        remaining_amount = total_amount
+        
+        for i, split in enumerate(splits):
+            pocket_id = split.get('pocket_id')
+            amount = float(split.get('amount', 0))
+            pocket = Pocket.query.filter_by(id=pocket_id, user_id=current_user.id, archived=False).first()
+            if not pocket:
+                return error_response(f'Pocket {pocket_id} not found', 404)
+            if i == len(splits) - 1:
+                amount = round(remaining_amount, 2)
+            remaining_amount = round(remaining_amount - amount, 2)
+            total_fixed += amount
+            allocations.append({
+                'pocket_id': pocket.id,
+                'pocket_name': pocket.name,
+                'pocket_color': pocket.color,
+                'pocket_icon': pocket.icon,
+                'amount': amount
+            })
+        
+        summary['total_allocated'] = round(total_amount - remaining_amount, 2)
+        summary['remaining'] = remaining_amount
+        
+    elif strategy == 'rule':
+        rule_id = data.get('rule_id')
+        if not rule_id:
+            return error_response('rule_id required for saved rule strategy', 400)
+        rule = DistributionRule.query.filter_by(id=rule_id, user_id=current_user.id, is_active=True).first()
+        if not rule:
+            return error_response('Distribution rule not found', 404)
+        
+        result, err = rule.calculate_allocations(total_amount)
+        if err:
+            return error_response(err, 400)
+        
+        allocations = []
+        remaining_amount = total_amount
+        
+        for i, alloc in enumerate(result):
+            pocket = Pocket.query.filter_by(id=alloc['pocket_id'], user_id=current_user.id, archived=False).first()
+            if not pocket:
+                continue
+            allocations.append({
+                    'pocket_id': pocket.id,
+                    'pocket_name': pocket.name,
+                    'pocket_color': pocket.color,
+                    'pocket_icon': pocket.icon,
+                    'amount': alloc['amount'],
+                    'percentage': alloc.get('percentage')
+                })
+            remaining_amount = round(remaining_amount - alloc['amount'], 2)
+        
+        summary['total_allocated'] = round(total_amount - remaining_amount, 2)
+        summary['remaining'] = remaining_amount
+        summary['rule_name'] = rule.name
+        
+    else:
+        return error_response(
+            'Invalid strategy. Use: single, percentage, fixed, or rule',
+            400,
+            code='INVALID_STRATEGY',
+            available_strategies=['single', 'percentage', 'fixed', 'rule']
+        )
+    
+    return json_response({
+        'allocations': allocations,
+        'summary': summary
+    })
+
+
+@bp.route('/income/execute', methods=['POST'])
+@api_login_required
+def execute_income_distribution():
+    data = request.get_json() or {}
+    valid, msg = validate_required_fields(data, ['total_amount', 'strategy'])
+    if not valid:
+        return error_response(msg, 400)
+    
+    total_amount = float(data.get('total_amount', 0))
+    if total_amount <= 0:
+        return error_response('Amount must be positive', 400)
+    
+    strategy = data.get('strategy')
+    description = data.get('description', '').strip() or 'Income received'
+    source = data.get('source', '').strip() or 'Other'
+    fund_source = (data.get('fund_source') or 'external').lower()
+    
+    if fund_source == 'wallet':
+        if current_user.wallet_balance < total_amount:
+            return error_response(
+                f'Insufficient wallet balance. Need ₹{total_amount:.2f} but wallet has ₹{current_user.wallet_balance:.2f}',
+                400,
+                code='INSUFFICIENT_WALLET_BALANCE'
+            )
+        current_user.wallet_balance -= total_amount
+        db.session.commit()
+    
+    allocations = []
+    
+    if strategy == 'single':
+        pocket_id = data.get('pocket_id')
+        if not pocket_id:
+            return error_response('pocket_id required for single pocket strategy', 400)
+        pocket = Pocket.query.filter_by(id=pocket_id, user_id=current_user.id, archived=False).first()
+        if not pocket:
+            return error_response('Pocket not found', 404)
+        allocations = [{'pocket_id': pocket.id, 'amount': total_amount}]
+        
+    elif strategy == 'percentage':
+        splits = data.get('splits', [])
+        if not splits:
+            return error_response('splits array required for percentage strategy', 400)
+        remaining = total_amount
+        for i, split in enumerate(splits):
+            pct = float(split.get('percentage', 0))
+            amount = round(total_amount * pct / 100, 2)
+            if i == len(splits) - 1:
+                amount = round(remaining, 2)
+            remaining = round(remaining - amount, 2)
+            allocations.append({'pocket_id': split.get('pocket_id'), 'amount': amount})
+            
+    elif strategy == 'fixed':
+        splits = data.get('splits', [])
+        if not splits:
+            return error_response('splits array required for fixed strategy', 400)
+        remaining = total_amount
+        for i, split in enumerate(splits):
+            amount = float(split.get('amount', 0))
+            if i == len(splits) - 1:
+                amount = round(remaining, 2)
+            remaining = round(remaining - amount, 2)
+            allocations.append({'pocket_id': split.get('pocket_id'), 'amount': amount})
+            
+    elif strategy == 'rule':
+        rule_id = data.get('rule_id')
+        if not rule_id:
+            return error_response('rule_id required for saved rule strategy', 400)
+        rule = DistributionRule.query.filter_by(id=rule_id, user_id=current_user.id, is_active=True).first()
+        if not rule:
+            return error_response('Distribution rule not found', 404)
+        result, err = rule.calculate_allocations(total_amount)
+        if err:
+            return error_response(err, 400)
+        allocations = [{'pocket_id': a['pocket_id'], 'amount': a['amount']} for a in result]
+        rule.mark_used()
+        
+    else:
+        return error_response('Invalid strategy', 400)
+    
+    try:
+        transactions = []
+        total_distributed = 0
+        
+        for alloc in allocations:
+            if alloc['amount'] <= 0:
+                continue
+            pocket = Pocket.query.filter_by(id=alloc['pocket_id'], user_id=current_user.id, archived=False).first()
+            if not pocket:
+                continue
+            pocket.current_balance += alloc['amount']
+            pocket.total_received += alloc['amount']
+            total_distributed += alloc['amount']
+            db.session.flush()
+            
+            tx = Transaction(
+                transaction_id=Transaction.generate_transaction_id(),
+                user_id=current_user.id,
+                type='income',
+                amount=alloc['amount'],
+                to_pocket_id=pocket.id,
+                category=source,
+                description=description,
+                payment_method='wallet'
+            )
+            db.session.add(tx)
+            tx.complete()
+            transactions.append(tx)
+            
+            budget = pocket.budget_usage_percent()
+            if budget >= 75:
+                pass
+        
+        db.session.commit()
+        
+        for tx in transactions:
+            Notification.transaction_alert(current_user.id, tx)
+        
+        Notification.create(
+            current_user.id,
+            'Income Distributed',
+            f'₹{total_distributed:.2f} distributed across {len(allocations)} pockets',
+            'success',
+            'high'
+        )
+        
+        return json_response({
+            'transactions': [t.to_dict(True) for t in transactions],
+            'total_distributed': total_distributed,
+            'pockets_updated': len(transactions)
+        }, f'₹{total_distributed:.2f} distributed successfully', 201)
+        
+    except Exception as e:
+        db.session.rollback()
+        return error_response(f'Distribution failed: {str(e)}', 500)
+
+
+@bp.route('/rules', methods=['GET'])
+@api_login_required
+def list_distribution_rules():
+    query = DistributionRule.query.filter_by(user_id=current_user.id).order_by(
+        DistributionRule.is_default.desc(),
+        DistributionRule.usage_count.desc()
+    )
+    
+    only_active = request.args.get('active_only', 'false').lower() == 'true'
+    if only_active:
+        query = query.filter_by(is_active=True)
+    
+    rules = [r.to_dict() for r in query.all()]
+    
+    default_rule = next((r for r in rules if r.get('is_default')), None)
+    
+    return json_response({
+        'rules': rules,
+        'total': len(rules),
+        'default_rule': default_rule
+    })
+
+
+@bp.route('/rules', methods=['POST'])
+@api_login_required
+def create_distribution_rule():
+    data = request.get_json() or {}
+    valid, msg = validate_required_fields(data, ['name', 'rule_type', 'allocations'])
+    if not valid:
+        return error_response(msg, 400)
+    
+    name = data.get('name', '').strip()
+    rule_type = data.get('rule_type', 'percentage')
+    allocations = data.get('allocations', [])
+    
+    if rule_type not in ('percentage', 'fixed'):
+        return error_response('rule_type must be percentage or fixed', 400)
+    
+    if not isinstance(allocations, list) or len(allocations) < 1:
+        return error_response('At least one allocation required', 400)
+    
+    temp_rule = DistributionRule(
+        user_id=current_user.id,
+        name=name,
+        rule_type=rule_type,
+        description=data.get('description', '').strip() or None,
+        allocations=allocations
+    )
+    
+    valid_alloc, err = temp_rule.validate_allocations(1000)
+    if not valid_alloc:
+        return error_response(f'Invalid allocations: {err}', 400)
+    
+    if data.get('is_default'):
+        DistributionRule.query.filter_by(user_id=current_user.id, is_default=True).update({'is_default': False})
+    
+    rule = DistributionRule(
+        user_id=current_user.id,
+        name=name,
+        rule_type=rule_type,
+        description=data.get('description', '').strip() or None,
+        allocations=allocations,
+        is_default=bool(data.get('is_default', False)),
+        is_active=True
+    )
+    
+    db.session.add(rule)
+    db.session.commit()
+    
+    Notification.create(
+        current_user.id,
+        'Distribution Rule Saved',
+        f'Rule "{name}" has been saved and is ready to use.',
+        'success',
+        'normal'
+    )
+    
+    return json_response({'rule': rule.to_dict()}, 'Rule created successfully', 201)
+
+
+@bp.route('/rules/<int:rule_id>', methods=['GET'])
+@api_login_required
+def get_distribution_rule(rule_id):
+    rule = DistributionRule.query.filter_by(id=rule_id, user_id=current_user.id).first()
+    if not rule:
+        return error_response('Rule not found', 404)
+    return json_response({'rule': rule.to_dict()})
+
+
+@bp.route('/rules/<int:rule_id>', methods=['PUT'])
+@api_login_required
+def update_distribution_rule(rule_id):
+    rule = DistributionRule.query.filter_by(id=rule_id, user_id=current_user.id).first()
+    if not rule:
+        return error_response('Rule not found', 404)
+    
+    data = request.get_json() or {}
+    
+    if 'name' in data and data['name']:
+        rule.name = data['name'].strip()
+    if 'description' in data:
+        rule.description = data['description'].strip() or None
+    if 'rule_type' in data and data['rule_type'] in ('percentage', 'fixed'):
+        rule.rule_type = data['rule_type']
+    if 'allocations' in data:
+        rule.allocations = data['allocations']
+    if 'is_default' in data:
+        if data['is_default']:
+            DistributionRule.query.filter(
+                DistributionRule.user_id == current_user.id,
+                DistributionRule.id != rule_id
+            ).update({'is_default': False})
+        rule.is_default = bool(data['is_default'])
+    if 'is_active' in data:
+        rule.is_active = bool(data['is_active'])
+    
+    valid, err = rule.validate_allocations(1000)
+    if not valid:
+        return error_response(f'Invalid allocations: {err}', 400)
+    
+    db.session.commit()
+    return json_response({'rule': rule.to_dict()}, 'Rule updated successfully')
+
+
+@bp.route('/rules/<int:rule_id>', methods=['DELETE'])
+@api_login_required
+def delete_distribution_rule(rule_id):
+    rule = DistributionRule.query.filter_by(id=rule_id, user_id=current_user.id).first()
+    if not rule:
+        return error_response('Rule not found', 404)
+    
+    rule_name = rule.name
+    db.session.delete(rule)
+    db.session.commit()
+    
+    return json_response(message=f'Rule "{rule_name}" deleted successfully')
+
+
+@bp.route('/withdraw', methods=['POST'])
+@api_login_required
+def wallet_withdraw():
+    data = request.get_json() or {}
+    valid, msg = validate_required_fields(data, ['amount'])
+    if not valid:
+        return error_response(msg, 400)
+    
+    amount = float(data.get('amount', 0))
+    if amount <= 0:
+        return error_response('Amount must be positive', 400)
+    
+    if current_user.transaction_pin_hash:
+        pin = str(data.get('pin', '')).strip()
+        if not pin:
+            return error_response('Transaction PIN is required', 400, code='PIN_REQUIRED')
+        success, error = current_user.verify_transaction_pin(pin)
+        if not success:
+            return error_response(error or 'Incorrect PIN', 401, code='INCORRECT_PIN')
+    
+    if current_user.wallet_balance < amount:
+        return error_response(
+            f'Insufficient wallet balance. You have ₹{current_user.wallet_balance:.2f}',
+            400,
+            code='INSUFFICIENT_BALANCE'
+        )
+    
+    current_user.wallet_balance = round(current_user.wallet_balance - amount, 2)
+    db.session.commit()
+    
+    tx = Transaction(
+        transaction_id=Transaction.generate_transaction_id(),
+        user_id=current_user.id,
+        type='withdraw',
+        amount=amount,
+        category='Wallet Withdrawal',
+        description=data.get('description', '').strip() or 'Withdrawal to bank',
+        payment_method=data.get('payment_method', 'bank')
+    )
+    db.session.add(tx)
+    tx.complete()
+    
+    Notification.transaction_alert(current_user.id, tx)
+    
+    return json_response({
+        'transaction': tx.to_dict(),
+        'new_balance': current_user.wallet_balance
+    }, f'₹{amount:.2f} withdrawn successfully', 201)
+
+
+@bp.route('/categories', methods=['GET'])
+@api_login_required
+def get_expense_categories():
+    return json_response({
+        'categories': EXPENSE_CATEGORIES,
+        'count': len(EXPENSE_CATEGORIES)
+    })

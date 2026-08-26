@@ -1,0 +1,324 @@
+{% extends "admin/admin_base.html" %}
+
+{% block title %}Dashboard — PocketPay Admin{% endblock %}
+{% block header_title %}Platform Dashboard (Live Database){% endblock %}
+
+{% block content %}
+
+<!-- 1. Real-Time Metrics Cards Grid -->
+<div class="admin-metrics-grid" id="metricsGrid">
+  
+  <!-- Total Users Card -->
+  <div class="admin-metric-card">
+    <div class="admin-metric-header">
+      <div class="admin-metric-label">Total Users</div>
+      <div class="admin-metric-icon" style="background:rgba(99,102,241,0.15);color:#818cf8">
+        <i data-lucide="users"></i>
+      </div>
+    </div>
+    <div class="admin-metric-value" id="statTotalUsers">{{ metrics.total_users }}</div>
+    <div class="admin-metric-sub">
+      <span style="color:var(--admin-success);font-weight:700">{{ metrics.verified_users }} Verified</span> &bull; 
+      <span style="color:var(--admin-warning);font-weight:700">{{ metrics.pending_approvals }} Pending</span>
+    </div>
+  </div>
+
+  <!-- Pending Approvals Card -->
+  <div class="admin-metric-card" style="{% if metrics.pending_approvals > 0 %}border-color:rgba(245,158,11,0.4);background:rgba(245,158,11,0.04){% endif %}">
+    <div class="admin-metric-header">
+      <div class="admin-metric-label">Pending Approvals</div>
+      <div class="admin-metric-icon" style="background:rgba(245,158,11,0.15);color:#fbbf24">
+        <i data-lucide="user-check"></i>
+      </div>
+    </div>
+    <div class="admin-metric-value" style="color:#fbbf24" id="statPendingApprovals">{{ metrics.pending_approvals }}</div>
+    <div class="admin-metric-sub">
+      {% if metrics.pending_approvals > 0 %}
+        <span class="admin-chip warning">Action Required</span>
+      {% else %}
+        <span style="color:var(--admin-text-dim)">All caught up ✓</span>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Smart Pockets Card -->
+  <div class="admin-metric-card">
+    <div class="admin-metric-header">
+      <div class="admin-metric-label">Smart Pockets</div>
+      <div class="admin-metric-icon" style="background:rgba(16,185,129,0.15);color:#34d399">
+        <i data-lucide="folder-kanban"></i>
+      </div>
+    </div>
+    <div class="admin-metric-value" id="statTotalPockets">{{ metrics.total_pockets }}</div>
+    <div class="admin-metric-sub">
+      Allocated: <b style="color:#34d399">₹{{ "{:,.2f}".format(metrics.total_pockets_balance) }}</b>
+    </div>
+  </div>
+
+  <!-- Total Platform Balance Pool Card -->
+  <div class="admin-metric-card">
+    <div class="admin-metric-header">
+      <div class="admin-metric-label">Total Platform Balance</div>
+      <div class="admin-metric-icon" style="background:rgba(59,130,246,0.15);color:#60a5fa">
+        <i data-lucide="wallet"></i>
+      </div>
+    </div>
+    <div class="admin-metric-value" id="statPlatformFunds">₹{{ "{:,.2f}".format(metrics.total_platform_funds) }}</div>
+    <div class="admin-metric-sub">
+      Wallet Pool: ₹{{ "{:,.2f}".format(metrics.total_wallet_balance) }}
+    </div>
+  </div>
+
+  <!-- Gross Transactions Card -->
+  <div class="admin-metric-card">
+    <div class="admin-metric-header">
+      <div class="admin-metric-label">Total Transactions</div>
+      <div class="admin-metric-icon" style="background:rgba(168,85,247,0.15);color:#c084fc">
+        <i data-lucide="arrow-left-right"></i>
+      </div>
+    </div>
+    <div class="admin-metric-value" id="statTotalTxs">{{ metrics.total_transactions }}</div>
+    <div class="admin-metric-sub">
+      <span style="color:var(--admin-success)">{{ metrics.completed_transactions }} completed</span>
+    </div>
+  </div>
+
+  <!-- Gross Volume Card -->
+  <div class="admin-metric-card">
+    <div class="admin-metric-header">
+      <div class="admin-metric-label">Gross Processed Volume</div>
+      <div class="admin-metric-icon" style="background:rgba(236,72,153,0.15);color:#f472b6">
+        <i data-lucide="trending-up"></i>
+      </div>
+    </div>
+    <div class="admin-metric-value" id="statGrossVolume">₹{{ "{:,.2f}".format(metrics.gross_volume) }}</div>
+    <div class="admin-metric-sub">
+      Live aggregate of all transactions
+    </div>
+  </div>
+
+</div>
+
+<!-- 2. Pending Approvals Queue (Action Banner) -->
+{% if pending_users and pending_users|length > 0 %}
+<div class="admin-card" style="border-color:rgba(245,158,11,0.3);background:rgba(245,158,11,0.03)">
+  <div class="admin-card-header">
+    <div class="admin-card-title" style="color:#fbbf24">
+      <i data-lucide="bell" style="width:20px;height:20px"></i>
+      Pending Registration Approvals ({{ pending_users|length }})
+    </div>
+    <a href="{{ url_for('admin.approvals') }}" class="admin-btn admin-btn-sm admin-btn-ghost">View All Approvals &rarr;</a>
+  </div>
+
+  <div class="admin-table-container">
+    <table class="admin-table">
+      <thead>
+        <tr>
+          <th>User</th>
+          <th>Contact</th>
+          <th>Registered At</th>
+          <th>Status</th>
+          <th style="text-align:right">Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in pending_users %}
+        <tr id="approvalRow{{ u.id }}">
+          <td>
+            <div style="font-weight:700">{{ u.full_name }}</div>
+            <div style="font-size:0.75rem;color:var(--admin-text-dim)">ID: {{ u.uuid[:8] }}</div>
+          </td>
+          <td>
+            <div>{{ u.email }}</div>
+            <div style="font-size:0.75rem;color:var(--admin-text-muted)">{{ u.phone or 'No phone' }}</div>
+          </td>
+          <td>{{ u.created_at }}</td>
+          <td><span class="admin-chip warning">Pending Approval</span></td>
+          <td style="text-align:right">
+            <div style="display:flex;gap:0.5rem;justify-content:flex-end">
+              <button class="admin-btn admin-btn-sm admin-btn-success" onclick="approveUser({{ u.id }}, '{{ u.email }}')">
+                <i data-lucide="check"></i> Approve & Send OTP
+              </button>
+              <button class="admin-btn admin-btn-sm admin-btn-danger" onclick="rejectUser({{ u.id }}, '{{ u.email }}')">
+                <i data-lucide="x"></i> Reject
+              </button>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<!-- 3. Two Columns: Recent Registrations & Recent Transactions -->
+<div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(450px, 1fr));gap:1.5rem">
+  
+  <!-- Recent Registrations Card -->
+  <div class="admin-card">
+    <div class="admin-card-header">
+      <div class="admin-card-title">
+        <i data-lucide="user-plus"></i>
+        Recent Registrations
+      </div>
+      <a href="{{ url_for('admin.users') }}" class="admin-btn admin-btn-sm admin-btn-ghost">View All Users &rarr;</a>
+    </div>
+
+    {% if recent_users and recent_users|length > 0 %}
+    <div class="admin-table-container">
+      <table class="admin-table">
+        <thead>
+          <tr>
+            <th>User</th>
+            <th>Email</th>
+            <th>Status</th>
+            <th>Joined</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for u in recent_users %}
+          <tr>
+            <td>
+              <div style="font-weight:700">{{ u.full_name }}</div>
+            </td>
+            <td>
+              <div style="font-size:0.82rem">{{ u.email }}</div>
+            </td>
+            <td>
+              {% if u.email_verified %}
+                <span class="admin-chip success">Verified</span>
+              {% elif u.otp_approval_status == 'pending_admin_approval' %}
+                <span class="admin-chip warning">Pending</span>
+              {% else %}
+                <span class="admin-chip info">Registered</span>
+              {% endif %}
+            </td>
+            <td style="font-size:0.8rem;color:var(--admin-text-muted)">{{ u.created_at }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="admin-empty-state">
+      <i data-lucide="users"></i>
+      <div>No registered users yet.</div>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Recent Transactions Card -->
+  <div class="admin-card">
+    <div class="admin-card-header">
+      <div class="admin-card-title">
+        <i data-lucide="receipt"></i>
+        Recent Platform Transactions
+      </div>
+      <a href="{{ url_for('admin.transactions') }}" class="admin-btn admin-btn-sm admin-btn-ghost">View All Transactions &rarr;</a>
+    </div>
+
+    {% if recent_txs and recent_txs|length > 0 %}
+    <div class="admin-table-container">
+      <table class="admin-table">
+        <thead>
+          <tr>
+            <th>Tx ID / User</th>
+            <th>Type</th>
+            <th>Amount</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for t in recent_txs %}
+          <tr>
+            <td>
+              <div style="font-family:var(--admin-mono);font-size:0.8rem;font-weight:700">{{ t.transaction_id }}</div>
+              <div style="font-size:0.75rem;color:var(--admin-text-muted)">{{ t.user_name }} ({{ t.user_email }})</div>
+            </td>
+            <td>
+              <span style="font-size:0.8rem;text-transform:capitalize">{{ t.type }}</span>
+            </td>
+            <td>
+              <b style="color:{% if t.type in ['income', 'topup'] %}var(--admin-success){% else %}#ffffff{% endif %}">
+                ₹{{ "{:,.2f}".format(t.amount) }}
+              </b>
+            </td>
+            <td>
+              <span class="admin-chip {% if t.status == 'completed' %}success{% elif t.status == 'pending' %}warning{% else %}danger{% endif %}">
+                {{ t.status }}
+              </span>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="admin-empty-state">
+      <i data-lucide="arrow-left-right"></i>
+      <div>No platform transactions yet.</div>
+    </div>
+    {% endif %}
+  </div>
+
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  async function approveUser(userId, email) {
+    if (!confirm(`Approve registration for ${email}? A 6-digit OTP will be emailed to them.`)) return;
+    try {
+      const res = await fetch(`/admin/api/approvals/${userId}/approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to approve');
+      showAdminToast('Approved', data.message, 'success');
+      const row = document.getElementById(`approvalRow${userId}`);
+      if (row) row.remove();
+      refreshAdminData();
+    } catch (e) {
+      showAdminToast('Error', e.message, 'error');
+    }
+  }
+
+  async function rejectUser(userId, email) {
+    if (!confirm(`Reject registration request for ${email}?`)) return;
+    try {
+      const res = await fetch(`/admin/api/approvals/${userId}/reject`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to reject');
+      showAdminToast('Rejected', data.message, 'warning');
+      const row = document.getElementById(`approvalRow${userId}`);
+      if (row) row.remove();
+      refreshAdminData();
+    } catch (e) {
+      showAdminToast('Error', e.message, 'error');
+    }
+  }
+
+  window.onAdminRefresh = async function() {
+    const res = await fetch('/admin/api/stats');
+    const json = await res.json();
+    if (json.success && json.data) {
+      const d = json.data;
+      document.getElementById('statTotalUsers').textContent = d.total_users;
+      document.getElementById('statPendingApprovals').textContent = d.pending_approvals;
+      document.getElementById('statTotalPockets').textContent = d.total_pockets;
+      document.getElementById('statPlatformFunds').textContent = '₹' + d.total_platform_funds.toLocaleString('en-IN', {minimumFractionDigits: 2});
+      document.getElementById('statTotalTxs').textContent = d.total_transactions;
+      document.getElementById('statGrossVolume').textContent = '₹' + d.gross_volume.toLocaleString('en-IN', {minimumFractionDigits: 2});
+    }
+  };
+
+  // Auto-refresh every 30 seconds
+  setInterval(window.onAdminRefresh, 30000);
+</script>
+{% endblock %}
