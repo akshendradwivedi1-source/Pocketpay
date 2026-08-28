@@ -1,9 +1,20 @@
 // ========== API Wrapper Layer ==========
 PP.API = {
+  getBaseUrl() {
+    if (window.POCKETPAY_API_BASE) {
+      return window.POCKETPAY_API_BASE.replace(/\/+$/, '');
+    }
+    if (window.location && window.location.origin && !window.location.origin.startsWith('file:') && !window.location.origin.startsWith('capacitor:')) {
+      return window.location.origin;
+    }
+    return '';
+  },
   async request(url, opts = {}) {
-    const res = await fetch(url, {
+    const baseUrl = this.getBaseUrl();
+    const fullUrl = url.startsWith('http') ? url : (baseUrl + url);
+    const res = await fetch(fullUrl, {
       headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
-      credentials: 'same-origin',
+      credentials: 'include',
       ...opts,
       body: opts.body ? (typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body)) : undefined,
     });

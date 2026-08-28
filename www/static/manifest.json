@@ -1,0 +1,49 @@
+{
+  "name": "PocketPay — Smart Pocket System",
+  "short_name": "PocketPay",
+  "description": "Smart pocket management, budgeting, and payments organizer.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0a0b14",
+  "theme_color": "#6366f1",
+  "categories": ["finance", "productivity", "utilities"],
+  "icons": [
+    {
+      "src": "/static/img/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/static/img/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Scan & Pay",
+      "short_name": "Scan QR",
+      "description": "Scan and pay via UPI or PocketPay QR",
+      "url": "/#scan",
+      "icons": [{ "src": "/static/img/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Transfer Money",
+      "short_name": "Transfer",
+      "description": "Transfer to bank or between pockets",
+      "url": "/#transfer",
+      "icons": [{ "src": "/static/img/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Smart Pockets",
+      "short_name": "Pockets",
+      "description": "View and manage smart pockets",
+      "url": "/#pockets",
+      "icons": [{ "src": "/static/img/icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}

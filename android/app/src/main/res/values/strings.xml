@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">PocketPay</string>
+    <string name="title_activity_main">PocketPay</string>
+    <string name="package_name">com.pocketpay.app</string>
+    <string name="custom_url_scheme">com.pocketpay.app</string>
+</resources>

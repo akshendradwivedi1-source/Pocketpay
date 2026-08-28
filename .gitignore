@@ -88,3 +88,15 @@ Thumbs.db
 *.tar.gz
 *.rar
 *.7z
+
+# Android & Gradle Build Artifacts
+tools/
+.gradle/
+android/.gradle/
+android/app/build/
+android/build/
+android/captures/
+android/local.properties
+android/Generated/
+*.apk
+*.aab

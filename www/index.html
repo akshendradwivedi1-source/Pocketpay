@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+<meta name="color-scheme" content="dark light" />
+<meta name="theme-color" content="#0a0b14" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="PocketPay" />
+<link rel="manifest" href="/static/manifest.json" />
+<title>PocketPay — Smart Pocket System</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/static/css/app.css" />
+<link rel="stylesheet" href="/static/css/animations.css" />
+<link rel="stylesheet" href="/static/css/charts.css" />
+<link rel="stylesheet" href="/static/css/assistant.css" />
+</head>
+<body>
+
+<div id="appLoader" class="app-loader">
+  <div class="loader-inner">
+    <div class="loader-logo">
+      <svg viewBox="0 0 48 48" fill="none">
+        <defs><linearGradient id="loaderGrad" x1="0" y1="0" x2="48" y2="48" gradientUnits="userSpaceOnUse"><stop stop-color="#6366f1"/><stop offset="1" stop-color="#ec4899"/></linearGradient></defs>
+        <rect width="48" height="48" rx="14" fill="url(#loaderGrad)"/>
+        <path d="M14 30L21 22L26 27L34 17" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>
+    <div class="loader-text">
+      <h2>PocketPay</h2>
+      <p>Loading your smart wallet…</p>
+    </div>
+    <div class="loader-progress"><div class="loader-bar"></div></div>
+  </div>
+</div>
+
+<div id="app" class="hidden">
+
+  <nav id="topNav" class="top-nav">
+    <div class="nav-inner">
+      <div class="nav-left">
+        <button id="sidebarToggle" class="icon-btn sidebar-toggle hidden-md" aria-label="Toggle menu">
+          <i data-lucide="menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-menu"><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></svg></i>
+        </button>
+        <a href="#" class="logo" data-route="dashboard">
+          <div class="logo-mark">
+            <svg viewBox="0 0 32 32" fill="none"><defs><linearGradient id="lg" x1="0" y1="0" x2="32" y2="32"><stop stop-color="#6366f1"/><stop offset="1" stop-color="#ec4899"/></linearGradient></defs><rect width="32" height="32" rx="9" fill="url(#lg)"/><path d="M9 20L14 15L17 18L23 11" stroke="white" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+          <div class="logo-text">
+            <h1>Pocket<span class="accent">Pay</span></h1>
+            <p>Smart Pocket System</p>
+          </div>
+        </a>
+      </div>
+      <div class="nav-center hidden-sm">
+        <div class="search-box">
+          <i data-lucide="search" class="search-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-search"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg></i>
+          <input id="globalSearch" type="text" placeholder="Search transactions, pockets, merchants…" />
+          <kbd>⌘K</kbd>
+        </div>
+      </div>
+      <div class="nav-right">
+        <button id="themeToggle" class="icon-btn" aria-label="Toggle theme" title="Toggle theme">
+          <i data-lucide="moon" class="theme-moon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-moon theme-moon"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg></i>
+          <i data-lucide="sun" class="theme-sun"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-sun theme-sun"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg></i>
+        </button>
+        <button id="notifBtn" class="icon-btn notif-btn" aria-label="Notifications" title="Notifications">
+          <i data-lucide="bell"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-bell"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg></i>
+          <span id="notifBadge" class="badge hidden">0</span>
+        </button>
+        <div class="avatar-menu" id="avatarMenu">
+          <button class="avatar-btn" id="avatarBtn">
+            <div class="avatar gradient-avatar">A</div>
+            <div class="avatar-info hidden-sm">
+              <span class="avatar-name" id="topAvatarName">Arjun Sharma</span>
+              <span class="avatar-role" id="topAvatarRole">Premium</span>
+            </div>
+            <i data-lucide="chevron-down" class="chevron"></i>
+          </button>
+          <div class="avatar-dropdown" id="avatarDropdown">
+            <div class="dropdown-header">
+              <div class="avatar gradient-avatar" id="dropAvatar">A</div>
+              <div>
+                <p class="drop-name" id="dropName">Arjun Sharma</p>
+                <p class="drop-email" id="dropEmail">demo@pocketpay.app</p>
+              </div>
+            </div>
+            <div class="dropdown-divider"></div>
+            <a href="/admin/dashboard" class="dropdown-item" id="adminPortalLink" style="display:none;color:#818cf8"><i data-lucide="shield"></i> Admin Control Center</a>
+            <button class="dropdown-item" data-route="profile"><i data-lucide="user"></i> My Profile</button>
+            <button class="dropdown-item" data-route="settings"><i data-lucide="settings"></i> Settings</button>
+            <button class="dropdown-item" id="setupPinBtn"><i data-lucide="shield-check"></i> Transaction PIN</button>
+            <div class="dropdown-divider"></div>
+            <button class="dropdown-item danger" id="logoutBtn"><i data-lucide="log-out"></i> Sign Out</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  <div class="layout">
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-inner">
+        <ul class="nav-list">
+          <li><a href="#" data-route="dashboard" class="nav-item active"><i data-lucide="layout-dashboard"></i><span>Dashboard</span><span class="nav-indicator"></span></a></li>
+          <li><a href="#" data-route="pockets" class="nav-item"><i data-lucide="wallet-cards"></i><span>Pockets</span><span class="nav-indicator"></span></a></li>
+          <li><a href="#" data-route="transactions" class="nav-item"><i data-lucide="arrow-left-right"></i><span>Transactions</span><span class="nav-indicator"></span></a></li>
+          <li><a href="#" data-route="analytics" class="nav-item"><i data-lucide="pie-chart"></i><span>Analytics</span><span class="nav-indicator"></span></a></li>
+          <li><a href="#" data-route="budgets" class="nav-item"><i data-lucide="target"></i><span>Budgets</span><span class="nav-indicator"></span></a></li>
+        </ul>
+        <div class="sidebar-section">
+          <p class="sidebar-label">Quick Actions</p>
+          <ul class="nav-list">
+            <li><a href="#" class="nav-item" id="sbAddIncome"><i data-lucide="arrow-down-left" class="income"></i><span>Add Income</span></a></li>
+            <li><a href="#" class="nav-item" id="sbAddExpense"><i data-lucide="arrow-up-right" class="expense"></i><span>Pay / Expense</span></a></li>
+            <li><a href="#" class="nav-item" id="sbTransfer"><i data-lucide="refresh-ccw"></i><span>Transfer</span></a></li>
+            <li><a href="#" data-route="wallet" class="nav-item"><i data-lucide="smartphone"></i><span>My Wallet</span></a></li>
+          </ul>
+        </div>
+        <div class="sidebar-card glass-card premium-card" data-route="premium" style="cursor:pointer" title="View Premium Plans">
+          <div class="premium-glow"></div>
+          <div class="premium-content">
+            <div class="premium-icon"><i data-lucide="sparkles"></i></div>
+            <h3>Premium Benefits</h3>
+            <ul>
+              <li><i data-lucide="check"></i> Unlimited pockets & goals</li>
+              <li><i data-lucide="check"></i> Pro financial insights</li>
+              <li><i data-lucide="check"></i> Priority demo support</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <main id="mainContent" class="main-content">
+      <div id="viewContainer"></div>
+    </main>
+  </div>
+
+  <div class="mobile-fab-bar">
+    <button class="fab-main" id="mobileFab">
+      <i data-lucide="plus"></i>
+    </button>
+  </div>
+  <div class="mobile-fab-menu" id="mobileFabMenu">
+    <button class="fab-item" data-action="income"><i data-lucide="arrow-down-left"></i><span>Income</span></button>
+    <button class="fab-item" data-action="expense"><i data-lucide="arrow-up-right"></i><span>Pay</span></button>
+    <button class="fab-item" data-action="transfer"><i data-lucide="refresh-ccw"></i><span>Transfer</span></button>
+    <button class="fab-item" data-action="pocket"><i data-lucide="folder-plus"></i><span>Pocket</span></button>
+  </div>
+
+  <nav class="bottom-nav">
+    <a href="#" data-route="dashboard" class="bottom-item active"><i data-lucide="layout-dashboard"></i><span>Home</span></a>
+    <a href="#" data-route="pockets" class="bottom-item"><i data-lucide="wallet-cards"></i><span>Pockets</span></a>
+    <button class="bottom-item center-fab" id="bottomCenterFab"><i data-lucide="plus"></i></button>
+    <a href="#" data-route="transactions" class="bottom-item"><i data-lucide="arrow-left-right"></i><span>Txns</span></a>
+    <a href="#" data-route="analytics" class="bottom-item"><i data-lucide="pie-chart"></i><span>Stats</span></a>
+  </nav>
+
+</div>
+
+<div id="modalRoot"></div>
+<div id="toastRoot" class="toast-root"></div>
+
+<div id="successOverlay" class="success-overlay hidden">
+  <div class="success-content">
+    <div class="success-checkmark"><svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="45" fill="none"/><path fill="none" d="M28 52 L42 66 L72 36"/></svg></div>
+    <h2 id="successTitle">Payment Successful</h2>
+    <p id="successSub">₹0.00 has been processed</p>
+    <div class="success-meta" id="successMeta"></div>
+  </div>
+</div>
+
+<script src="/static/js/lucide.min.js"></script>
+<script src="/static/js/app.js"></script>
+<script src="/static/js/api.js"></script>
+<script src="/static/js/ui.js"></script>
+<script src="/static/js/views/dashboard.js"></script>
+<script src="/static/js/views/pockets.js"></script>
+<script src="/static/js/views/transactions.js"></script>
+<script src="/static/js/views/analytics.js"></script>
+<script src="/static/js/views/wallet.js"></script>
+<script src="/static/js/views/premium.js"></script>
+<script src="/static/js/views/modals.js"></script>
+<script src="/static/js/assistant.js"></script>
+<script src="/static/js/init.js"></script>
+</body>
+</html>
