@@ -61,8 +61,20 @@ def create_app(config_name=None):
     app.register_blueprint(admin_bp, url_prefix='/admin')
     
     with app.app_context():
-        from app.seeds import seed_database_if_empty
+        from sqlalchemy import inspect, text
         db.create_all()
-        seed_database_if_empty()
+        try:
+            inspector = inspect(db.engine)
+            if 'users' in inspector.get_table_names():
+                columns = [c['name'] for c in inspector.get_columns('users')]
+                if 'is_admin' not in columns:
+                    with db.engine.connect() as conn:
+                        conn.execute(text("ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT 0"))
+                        conn.commit()
+        except Exception:
+            pass
+        if config_name != 'testing':
+            from app.seeds import seed_database_if_empty
+            seed_database_if_empty()
     
     return app

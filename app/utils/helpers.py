@@ -10,8 +10,7 @@ def get_admin_email():
         admin_email = (
             current_app.config.get('POCKETPAY_ADMIN_EMAIL') or
             current_app.config.get('ADMIN_EMAIL') or
-            current_app.config.get('MAIL_USERNAME') or
-            ''
+            'akshendra.dwivedi1@gmail.com'
         )
     return str(admin_email).strip().lower()
 
@@ -19,11 +18,14 @@ def get_admin_email():
 def is_admin_user(user):
     if not user or not getattr(user, 'is_authenticated', False):
         return False
+    if getattr(user, 'is_admin', False):
+        return True
     admin_email = get_admin_email()
-    if not admin_email:
-        return False
-    user_email = str(getattr(user, 'email', '') or '').strip().lower()
-    return user_email == admin_email
+    if admin_email:
+        user_email = str(getattr(user, 'email', '') or '').strip().lower()
+        if user_email == admin_email:
+            return True
+    return False
 
 
 def admin_required(f):
@@ -36,7 +38,7 @@ def admin_required(f):
                     'error': 'Unauthorized',
                     'message': 'Admin login required'
                 }), 401
-            return redirect(url_for('main.index', next=request.url))
+            return redirect(url_for('admin.admin_login', next=request.url))
         
         if not is_admin_user(current_user):
             if request.is_json or request.path.startswith('/api/') or request.path.startswith('/admin/api/'):

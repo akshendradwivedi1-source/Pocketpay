@@ -81,7 +81,7 @@ def create_pocket():
     if not valid:
         return error_response(msg, 400)
     
-    name = data.get('name', '').strip()
+    name = str(data.get('name') or '').strip()
     if len(name) < 1 or len(name) > 100:
         return error_response('Pocket name must be between 1 and 100 characters', 400)
     
@@ -106,13 +106,16 @@ def create_pocket():
     max_order = db.session.query(db.func.max(Pocket.sort_order))\
         .filter_by(user_id=current_user.id).scalar() or -1
     
+    raw_desc = data.get('description')
+    clean_desc = str(raw_desc).strip() if raw_desc is not None and str(raw_desc).strip() else None
+    
     pocket = Pocket(
         user_id=current_user.id,
         name=name,
-        description=data.get('description', '').strip() or None,
-        color=data.get('color', '#6366f1'),
-        icon=data.get('icon', 'wallet'),
-        icon_type=data.get('icon_type', 'lucide'),
+        description=clean_desc,
+        color=str(data.get('color') or '#6366f1').strip(),
+        icon=str(data.get('icon') or 'wallet').strip(),
+        icon_type=str(data.get('icon_type') or 'lucide').strip(),
         budget_amount=float(data.get('budget_amount', 0) or 0),
         monthly_limit=float(data.get('monthly_limit', 0) or 0),
         priority=int(data.get('priority', 0) or 0),
@@ -177,7 +180,7 @@ def update_pocket(pocket_id):
         if field in data:
             value = data[field]
             if field == 'name':
-                value = value.strip()
+                value = str(value or '').strip()
                 if not value or len(value) > 100:
                     return error_response('Pocket name must be between 1 and 100 characters', 400)
                 existing = Pocket.query.filter(
@@ -188,17 +191,17 @@ def update_pocket(pocket_id):
                 ).first()
                 if existing:
                     return error_response('A pocket with this name already exists', 409)
-            if field in ('budget_amount', 'monthly_limit'):
+            elif field in ('budget_amount', 'monthly_limit'):
                 value = float(value or 0)
                 if value < 0:
                     return error_response(f'{field} cannot be negative', 400)
-            if field == 'priority':
+            elif field in ('priority', 'sort_order'):
                 value = int(value or 0)
-            if field == 'sort_order':
-                value = int(value or 0)
-            if field == 'description':
-                value = value.strip() if value else None
-            if field == 'spending_rules':
+            elif field == 'description':
+                value = str(value).strip() if value is not None and str(value).strip() else None
+            elif field in ('color', 'icon', 'icon_type'):
+                value = str(value or '').strip()
+            elif field == 'spending_rules':
                 value = value or {}
             setattr(pocket, field, value)
             changes = True

@@ -513,6 +513,21 @@ PP.WalletAPI = {
   updateRule(id, payload) { return PP.API.put(`/api/wallet/rules/${id}`, payload); },
   deleteRule(id) { return PP.API.delete(`/api/wallet/rules/${id}`); },
   categories() { return PP.API.get('/api/wallet/categories'); },
+  searchUser(q) { return PP.API.get('/api/wallet/search-user', { q }); },
+  sendMoney(payload) {
+    const pin = payload.pin;
+    const pinStr = typeof pin === 'object' && pin !== null ? pin.pin : String(pin || '');
+    const totp = payload.totp_code || (typeof pin === 'object' && pin !== null ? pin.totp_code : null);
+    return PP.API.post('/api/wallet/send-money', { ...payload, pin: pinStr, totp_code: totp });
+  },
+  requestMoney(payload) { return PP.API.post('/api/wallet/request-money', payload); },
+  listRequests(params = {}) { return PP.API.get('/api/wallet/requests', params); },
+  payRequest(req_id, pin, extras = {}) {
+    const pinStr = typeof pin === 'object' && pin !== null ? pin.pin : String(pin || '');
+    const totp = extras.totp_code || (typeof pin === 'object' && pin !== null ? pin.totp_code : null);
+    return PP.API.post(`/api/wallet/requests/${req_id}/pay`, { pin: pinStr, totp_code: totp, ...extras });
+  },
+  declineRequest(req_id) { return PP.API.post(`/api/wallet/requests/${req_id}/decline`); },
 };
 
 // ========== Pockets ==========
@@ -607,4 +622,15 @@ PP.PayoutsAPI = {
   },
   payoutStatus(payout_id) { return PP.API.get(`/api/payouts/${payout_id}`); },
 };
+
+// ========== Savings Goals (Phase 11) ==========
+PP.GoalsAPI = {
+  list() { return PP.API.get('/api/analytics/goals'); },
+  create(payload) { return PP.API.post('/api/analytics/goals', payload); },
+  update(id, payload) { return PP.API.put(`/api/analytics/goals/${id}`, payload); },
+  deposit(id, amount, source = 'wallet') { return PP.API.post(`/api/analytics/goals/${id}/deposit`, { amount, source }); },
+  withdraw(id, amount) { return PP.API.post(`/api/analytics/goals/${id}/withdraw`, { amount }); },
+  delete(id) { return PP.API.delete(`/api/analytics/goals/${id}`); },
+};
+
 

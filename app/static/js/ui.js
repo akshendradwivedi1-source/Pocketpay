@@ -19,8 +19,9 @@ PP.UI = {
       PP.el('button', {
         class: 'toast-close',
         'aria-label': 'Close',
+        title: 'Close',
         onclick: () => close(),
-      }, [PP.el('i', { 'data-lucide': 'x' })]),
+      }, [PP.createSvgIcon ? PP.createSvgIcon('x') : PP.el('i', { 'data-lucide': 'x' })]),
     ]);
     root.appendChild(el);
     PP.refreshIcons();
@@ -114,8 +115,9 @@ PP.UI = {
       closable ? PP.el('button', {
         class: 'modal-close',
         'aria-label': 'Close',
+        title: 'Close',
         onclick: () => close(),
-      }, [PP.el('i', { 'data-lucide': 'x' })]) : null,
+      }, [PP.createSvgIcon ? PP.createSvgIcon('x') : PP.el('i', { 'data-lucide': 'x' })]) : null,
     ]);
     const bodyEl = PP.el('div', { class: 'modal-body' }, [body || null]);
     const footerEl = PP.el('div', { class: 'modal-footer' }, (footer || []).filter(Boolean));

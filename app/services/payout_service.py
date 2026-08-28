@@ -6,6 +6,8 @@ import hashlib
 from datetime import datetime
 from urllib.parse import urlparse, parse_qs
 from app.extensions import db
+from sqlalchemy.orm.attributes import flag_modified
+from app.models.user import User
 from app.models.transaction import Transaction
 from app.models.notification import Notification
 from app.models.pocket import Pocket
@@ -206,12 +208,86 @@ class PayoutProvider:
             "processed_at": datetime.utcnow().isoformat()
         }
         
+        # Identify if recipient bank account is registered to any PocketPay user (User B)
+        clean_target_acc = re.sub(r'[\s\-]', '', acc_num)
+        recipient_user = None
+        
+        all_other_users = User.query.filter(User.id != user.id).all()
+        for u in all_other_users:
+            for b in (u.linked_banks or []):
+                b_acc = str(b.get('account_number') or '').strip()
+                b_clean = re.sub(r'[\s\-]', '', b_acc)
+                b_mask = str(b.get('account_mask') or '')
+                
+                # Match by clean account number or mask suffix
+                if (b_clean and b_clean == clean_target_acc) or (b_mask and b_mask.endswith(clean_target_acc[-4:])):
+                    recipient_user = u
+                    break
+            if recipient_user:
+                break
+                
+        # If recipient User B is a registered PocketPay user, reflect sandbox transfer into their account
+        tx_recipient = None
+        if recipient_user:
+            user_banks = [dict(b) for b in (recipient_user.linked_banks or [])]
+            for b in user_banks:
+                b_acc = str(b.get('account_number') or '').strip()
+                b_clean = re.sub(r'[\s\-]', '', b_acc)
+                b_mask = str(b.get('account_mask') or '')
+                if (b_clean and b_clean == clean_target_acc) or (b_mask and b_mask.endswith(clean_target_acc[-4:])):
+                    b['balance'] = round(float(b.get('balance', 0.0)) + amount, 2)
+                    b['last_synced_at'] = datetime.utcnow().isoformat()
+                    break
+            recipient_user.linked_banks = user_banks
+            flag_modified(recipient_user, 'linked_banks')
+            
+            # Credit recipient wallet/available balance
+            recipient_user.wallet_balance = round((recipient_user.wallet_balance or 0.0) + amount, 2)
+            
+            # Create incoming transaction record for recipient
+            tx_recipient = Transaction(
+                transaction_id=Transaction.generate_transaction_id(),
+                user_id=recipient_user.id,
+                type='peer_receive',
+                amount=amount,
+                category='Bank Transfer',
+                merchant=user.full_name,
+                description=f'Received bank transfer from {user.full_name} ({bank_name} {masked_acc}) [Sandbox Mode]',
+                payment_method='bank_transfer',
+                extra_data={
+                    'is_sandbox': is_sandbox,
+                    'payout_id': payout_id,
+                    'utr': utr_number,
+                    'sender_user_id': user.id,
+                    'sender_name': user.full_name,
+                    'sender_email': user.email,
+                    'bank_name': bank_name,
+                    'account_mask': masked_acc,
+                    'ifsc_code': ifsc,
+                    'mode': mode.upper()
+                }
+            )
+            tx_recipient.qr_code_url = generate_qr_code(f"pocketpay://tx/{tx_recipient.transaction_id}", 250)
+            db.session.add(tx_recipient)
+            tx_recipient.complete()
+            
+            # Notify recipient
+            Notification.transaction_alert(recipient_user.id, tx_recipient)
+            Notification.create(
+                recipient_user.id,
+                'Bank Transfer Received! 💰',
+                f'₹{amount:,.2f} received from {user.full_name} into your {bank_name} account ({masked_acc}). UTR: {utr_number}.',
+                'success',
+                'high'
+            )
+        
         tx = Transaction(
             transaction_id=Transaction.generate_transaction_id(),
             user_id=user.id,
             type='withdraw',
             amount=amount,
             category='Bank Transfer',
+            merchant=holder,
             description=f'Transfer to {holder} ({bank_name} {masked_acc}) via {mode.upper()}',
             payment_method='bank_transfer',
             extra_data={
@@ -219,7 +295,12 @@ class PayoutProvider:
                 'payout': payout_payload,
                 'payout_id': payout_id,
                 'utr': utr_number,
-                'is_sandbox': is_sandbox
+                'is_sandbox': is_sandbox,
+                'recipient_user_id': recipient_user.id if recipient_user else None,
+                'recipient_name': holder,
+                'bank_name': bank_name,
+                'account_mask': masked_acc,
+                'ifsc_code': ifsc
             }
         )
         tx.qr_code_url = generate_qr_code(f"pocketpay://tx/{tx.transaction_id}", 250)
@@ -241,6 +322,7 @@ class PayoutProvider:
             "success": True,
             "payout": payout_payload,
             "transaction": tx.to_dict(True),
+            "recipient_transaction": tx_recipient.to_dict(True) if tx_recipient else None,
             "qr_code_url": tx.qr_code_url,
             "receipt_qr": tx.qr_code_url,
             "wallet_balance": user.wallet_balance,

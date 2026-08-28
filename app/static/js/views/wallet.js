@@ -193,12 +193,50 @@ PP.Wallet = {
       }
       leftCol.appendChild(banksCard);
 
+      // Peer-to-Peer Payments & Transfers Card
+      const p2pCard = PP.el('div', { class: 'section-card' }, [
+        PP.el('div', { class: 'section-title' }, [
+          PP.el('h3', {}, ['Peer Payments & Transfers']),
+          PP.el('span', { class: 'chip accent' }, ['P2P Instant'])
+        ]),
+        PP.el('p', { class: 'text-sm text-muted', style: 'margin-bottom:1rem' }, [
+          'Send or request money with zero fees across all PocketPay accounts.'
+        ]),
+        PP.el('div', { style: 'display:grid;grid-template-columns:repeat(auto-fit, minmax(130px, 1fr));gap:0.6rem;margin-bottom:0.75rem' }, [
+          PP.el('button', {
+            class: 'btn btn-primary btn-sm',
+            style: 'display:flex;align-items:center;justify-content:center;gap:0.4rem;font-weight:600',
+            onclick: () => PP.Modals.sendMoney()
+          }, [PP.el('i', { 'data-lucide': 'send' }), 'Send Money']),
+          PP.el('button', {
+            class: 'btn btn-outline btn-sm',
+            style: 'display:flex;align-items:center;justify-content:center;gap:0.4rem;font-weight:600',
+            onclick: () => PP.Modals.requestMoney()
+          }, [PP.el('i', { 'data-lucide': 'hand-coins' }), 'Request Money']),
+          PP.el('button', {
+            class: 'btn btn-outline btn-sm',
+            style: 'display:flex;align-items:center;justify-content:center;gap:0.4rem;font-weight:600',
+            onclick: () => PP.Modals.moneyRequests()
+          }, [PP.el('i', { 'data-lucide': 'inbox' }), 'Requests List']),
+          PP.el('button', {
+            class: 'btn btn-outline btn-sm',
+            style: 'display:flex;align-items:center;justify-content:center;gap:0.4rem;font-weight:600',
+            onclick: () => PP.Modals.transferToBank()
+          }, [PP.el('i', { 'data-lucide': 'landmark' }), 'Bank Payout']),
+        ])
+      ]);
+      rightCol.appendChild(p2pCard);
+
       // Security & Danger Zone
+      const hasPin = Boolean(user.has_transaction_pin || user.has_pin || user.transaction_pin_hash);
       const secCard = PP.el('div', { class: 'section-card' }, [
-        PP.el('div', { class: 'section-title' }, [PP.el('h3', {}, ['Security & Settings']), PP.el('span', { class: 'chip ' + (user.transaction_pin_hash ? 'success' : 'warning') }, [user.transaction_pin_hash ? 'PIN ON' : 'NO PIN'])]),
+        PP.el('div', { class: 'section-title' }, [
+          PP.el('h3', {}, ['Security & Settings']),
+          PP.el('span', { class: 'chip ' + (hasPin ? 'success' : 'warning') }, [hasPin ? 'PIN SET' : 'NO PIN'])
+        ]),
       ]);
       secCard.appendChild(PP.el('div', { style: 'display:flex;flex-direction:column;gap:.6rem' }, [
-        PP.Wallet.settingRow('Transaction PIN', user.transaction_pin_hash ? 'Enabled' : 'Not set', 'lock', () => user.transaction_pin_hash ? PP.Modals.changePin() : PP.Modals.setupPin()),
+        PP.Wallet.settingRow('Transaction PIN', hasPin ? 'Enabled (Configured)' : 'Not set', 'lock', () => hasPin ? PP.Modals.changePin() : PP.Modals.setupPin()),
         PP.Wallet.settingRow(
           'Two-Factor Auth (2FA / TOTP)',
           user.totp_enabled ? 'Enabled (Google / Microsoft Authenticator)' : 'Disabled — Tap to Enable Free 2FA',

@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime
 from flask import Blueprint, request, render_template, redirect, url_for, jsonify, current_app
-from flask_login import current_user
+from flask_login import current_user, login_user, logout_user
 from sqlalchemy import func, or_, desc
 
 from app.extensions import db
@@ -12,6 +12,7 @@ from app.models.admin_audit_log import AdminAuditLog
 from app.utils.helpers import (
     admin_required,
     api_admin_required,
+    is_admin_user,
     json_response,
     error_response,
     get_paginated_query,
@@ -26,6 +27,79 @@ bp = Blueprint('admin', __name__)
 
 
 # =============================================================================
+# ADMIN AUTHENTICATION ROUTES
+# =============================================================================
+
+@bp.route('/login', methods=['GET', 'POST'])
+def admin_login():
+    """Dedicated Admin Login page with server-side credentials authentication"""
+    if request.method == 'GET':
+        if current_user.is_authenticated and is_admin_user(current_user):
+            return redirect(url_for('admin.dashboard'))
+        return render_template('admin/login.html', admin_email=get_admin_email())
+    
+    # POST
+    data = request.get_json(silent=True) if request.is_json else request.form
+    email = (data.get('email') or data.get('username') or '').strip().lower()
+    password = data.get('password') or ''
+    remember = bool(data.get('remember', False))
+    next_url = request.args.get('next') or url_for('admin.dashboard')
+    
+    if not email or not password:
+        err = 'Email and password are required'
+        if request.is_json:
+            return error_response(err, 400)
+        return render_template('admin/login.html', error=err, admin_email=get_admin_email()), 400
+        
+    user = User.query.filter_by(email=email).first()
+    if not user or not user.verify_password(password) or not is_admin_user(user):
+        err = 'Invalid admin credentials or unauthorized account.'
+        if request.is_json:
+            return error_response(err, 401)
+        return render_template('admin/login.html', error=err, email=email, admin_email=get_admin_email()), 401
+        
+    if not user.is_active:
+        err = 'Admin account is deactivated.'
+        if request.is_json:
+            return error_response(err, 403)
+        return render_template('admin/login.html', error=err, admin_email=get_admin_email()), 403
+        
+    login_user(user, remember=remember, force=True)
+    user.last_login_at = datetime.utcnow()
+    db.session.commit()
+    
+    AdminAuditLog.record(
+        admin_email=user.email,
+        action='admin_login',
+        target_type='admin_session',
+        target_id=str(user.id),
+        details={'email': user.email, 'login_time': datetime.utcnow().isoformat()}
+    )
+    
+    if request.is_json:
+        return json_response({'user': serialize_admin_user(user), 'next_url': next_url}, 'Admin authenticated successfully')
+        
+    return redirect(next_url)
+
+
+@bp.route('/logout', methods=['GET', 'POST'])
+def admin_logout():
+    """Logs out admin and redirects back to dedicated admin login"""
+    if current_user.is_authenticated:
+        AdminAuditLog.record(
+            admin_email=getattr(current_user, 'email', 'unknown'),
+            action='admin_logout',
+            target_type='admin_session',
+            target_id=str(getattr(current_user, 'id', ''))
+        )
+        logout_user()
+    if request.is_json:
+        return json_response(message='Admin logged out successfully')
+    return redirect(url_for('admin.admin_login'))
+
+
+
+# =============================================================================
 # HELPER QUERY FUNCTIONS (Real Live DB Metrics)
 # =============================================================================
 
@@ -36,6 +110,8 @@ def get_live_admin_metrics():
     pending_approvals = User.query.filter(User.otp_approval_status == 'pending_admin_approval').count()
     active_users = User.query.filter_by(is_active=True).count()
     suspended_users = User.query.filter_by(is_active=False).count()
+    premium_users = User.query.filter_by(is_premium=True).count()
+    free_users = User.query.filter(or_(User.is_premium == False, User.is_premium == None)).count()
 
     total_pockets = Pocket.query.filter_by(archived=False).count()
     total_pockets_balance = float(db.session.query(func.coalesce(func.sum(Pocket.current_balance), 0.0)).filter_by(archived=False).scalar() or 0.0)
@@ -45,6 +121,7 @@ def get_live_admin_metrics():
     total_transactions = Transaction.query.count()
     completed_transactions = Transaction.query.filter_by(status='completed').count()
     failed_transactions = Transaction.query.filter_by(status='failed').count()
+    pending_transactions = Transaction.query.filter_by(status='pending').count()
     gross_volume = float(db.session.query(func.coalesce(func.sum(Transaction.amount), 0.0)).filter_by(status='completed').scalar() or 0.0)
 
     return {
@@ -53,6 +130,8 @@ def get_live_admin_metrics():
         'pending_approvals': pending_approvals,
         'active_users': active_users,
         'suspended_users': suspended_users,
+        'premium_users': premium_users,
+        'free_users': free_users,
         'total_pockets': total_pockets,
         'total_pockets_balance': total_pockets_balance,
         'total_wallet_balance': total_wallet_balance,
@@ -60,6 +139,7 @@ def get_live_admin_metrics():
         'total_transactions': total_transactions,
         'completed_transactions': completed_transactions,
         'failed_transactions': failed_transactions,
+        'pending_transactions': pending_transactions,
         'gross_volume': gross_volume,
         'admin_email': get_admin_email(),
         'last_updated': datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
@@ -85,6 +165,8 @@ def serialize_admin_user(u):
         'otp_approval_status': u.otp_approval_status or 'none',
         'totp_enabled': bool(u.totp_enabled),
         'has_pin': bool(u.transaction_pin_hash),
+        'is_premium': bool(u.is_premium),
+        'is_admin': bool(u.is_admin),
         'pockets_count': pockets_count,
         'transactions_count': tx_count,
         'linked_banks_count': len(u.linked_banks or []),
@@ -270,6 +352,10 @@ def api_users():
         query = query.filter(User.is_active == True)
     elif status == 'suspended':
         query = query.filter(User.is_active == False)
+    elif status == 'premium':
+        query = query.filter(User.is_premium == True)
+    elif status == 'free':
+        query = query.filter(or_(User.is_premium == False, User.is_premium == None))
 
     query = query.order_by(User.created_at.desc())
     pagination = get_paginated_query(query)
@@ -304,8 +390,8 @@ def api_toggle_user_status(user_id):
     if not user:
         return error_response('User not found', 404)
 
-    if user.email.lower() == get_admin_email():
-        return error_response('Cannot suspend the primary administrator account', 400)
+    if user.email.lower() in {get_admin_email().lower(), 'akshendra.dwivedi1@gmail.com', 'admin@pocketpay.app'}:
+        return error_response('Cannot modify status of a protected root administrator account', 400)
 
     user.is_active = not user.is_active
     db.session.commit()
@@ -324,6 +410,58 @@ def api_toggle_user_status(user_id):
         {'id': user.id, 'is_active': user.is_active},
         f"User {user.full_name} ({user.email}) has been {status_str}."
     )
+
+
+@bp.route('/api/users/<int:user_id>/toggle-premium', methods=['POST'])
+@api_admin_required
+def api_toggle_user_premium(user_id):
+    """Toggles user demo premium subscription tier"""
+    user = db.session.get(User, user_id)
+    if not user:
+        return error_response('User not found', 404)
+
+    user.is_premium = not user.is_premium
+    db.session.commit()
+
+    AdminAuditLog.record(
+        admin_email=current_user.email,
+        action='toggle_premium',
+        target_type='user',
+        target_id=str(user.id),
+        details={'user_email': user.email, 'new_status': 'premium' if user.is_premium else 'free'}
+    )
+
+    return json_response({
+        'id': user.id,
+        'is_premium': user.is_premium
+    }, f"User {user.full_name} is now {'Premium' if user.is_premium else 'Free'}.")
+
+
+@bp.route('/api/users/<int:user_id>/delete', methods=['DELETE', 'POST'])
+@api_admin_required
+def api_delete_user(user_id):
+    """Deletes or deactivates a user account completely"""
+    user = db.session.get(User, user_id)
+    if not user:
+        return error_response('User not found', 404)
+
+    if user.email.lower() in {get_admin_email().lower(), 'akshendra.dwivedi1@gmail.com', 'admin@pocketpay.app'}:
+        return error_response('Cannot delete root administrator account', 400)
+
+    email = user.email
+    full_name = user.full_name
+    db.session.delete(user)
+    db.session.commit()
+
+    AdminAuditLog.record(
+        admin_email=current_user.email,
+        action='delete_user',
+        target_type='user',
+        target_id=str(user_id),
+        details={'user_email': email, 'full_name': full_name}
+    )
+
+    return json_response({'id': user_id}, f"User {full_name} ({email}) deleted successfully.")
 
 
 @bp.route('/api/approvals', methods=['GET'])
@@ -464,3 +602,108 @@ def api_audit_logs():
         return entry.to_dict()
 
     return json_response(paginated_response(pagination, serialize_log))
+
+
+@bp.route('/api/analytics/charts', methods=['GET'])
+@api_admin_required
+def api_analytics_charts():
+    """Generates real database charts data (7-day volume, category split, user growth)"""
+    from datetime import datetime, timedelta
+
+    # 1. 7-Day Daily Transaction Volume from Real Database Records
+    daily_volume = []
+    today = datetime.utcnow().date()
+    for i in range(6, -1, -1):
+        day_date = today - timedelta(days=i)
+        day_start = datetime.combine(day_date, datetime.min.time())
+        day_end = datetime.combine(day_date, datetime.max.time())
+        
+        day_txs = Transaction.query.filter(
+            Transaction.created_at >= day_start,
+            Transaction.created_at <= day_end,
+            Transaction.status == 'completed'
+        ).all()
+        
+        day_vol = sum(t.amount for t in day_txs)
+        daily_volume.append({
+            'date': day_date.strftime('%b %d'),
+            'volume': round(day_vol, 2),
+            'count': len(day_txs)
+        })
+
+    # 2. Category Breakdown from Real Database Transactions
+    cat_query = db.session.query(
+        Transaction.category,
+        func.count(Transaction.id).label('tx_count'),
+        func.coalesce(func.sum(Transaction.amount), 0.0).label('total_amount')
+    ).filter(
+        Transaction.status == 'completed'
+    ).group_by(Transaction.category).all()
+
+    category_breakdown = [{
+        'category': row[0] or 'General',
+        'count': row[1],
+        'amount': float(row[2])
+    } for row in cat_query]
+
+    # 3. User Growth (Past 7 days)
+    user_growth = []
+    for i in range(6, -1, -1):
+        day_date = today - timedelta(days=i)
+        day_start = datetime.combine(day_date, datetime.min.time())
+        day_end = datetime.combine(day_date, datetime.max.time())
+        
+        reg_count = User.query.filter(
+            User.created_at >= day_start,
+            User.created_at <= day_end
+        ).count()
+        
+        user_growth.append({
+            'date': day_date.strftime('%b %d'),
+            'registrations': reg_count
+        })
+
+    return json_response({
+        'daily_volume': daily_volume,
+        'category_breakdown': category_breakdown,
+        'user_growth': user_growth,
+        'generated_at': datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
+    }, 'Live chart analytics retrieved successfully')
+
+
+@bp.route('/api/recent-activity', methods=['GET'])
+@api_admin_required
+def api_recent_activity():
+    """Returns chronological live activity feed combining audit logs, transactions, and user registrations"""
+    activity = []
+
+    # Audit Logs
+    audit_logs = AdminAuditLog.query.order_by(AdminAuditLog.created_at.desc()).limit(15).all()
+    for al in audit_logs:
+        activity.append({
+            'type': 'audit',
+            'title': f"Admin Action: {al.action.replace('_', ' ').title()}",
+            'description': f"By {al.admin_email} on {al.target_type} ({al.target_id})",
+            'timestamp': al.created_at.strftime('%Y-%m-%d %H:%M:%S') if al.created_at else None,
+            'raw_time': al.created_at or datetime.min
+        })
+
+    # Recent Transactions
+    recent_txs = Transaction.query.order_by(Transaction.created_at.desc()).limit(15).all()
+    for tx in recent_txs:
+        u = db.session.get(User, tx.user_id) if tx.user_id else None
+        u_name = u.full_name if u else 'User'
+        activity.append({
+            'type': 'transaction',
+            'title': f"Transaction {tx.type.upper()}: ₹{tx.amount:,.2f}",
+            'description': f"{u_name} ({tx.status}) - {tx.category or 'General'}",
+            'timestamp': tx.created_at.strftime('%Y-%m-%d %H:%M:%S') if tx.created_at else None,
+            'raw_time': tx.created_at or datetime.min
+        })
+
+    # Sort merged activity descending by timestamp
+    activity.sort(key=lambda x: x['raw_time'], reverse=True)
+    for item in activity:
+        item.pop('raw_time', None)
+
+    return json_response(activity[:20], 'Recent live activity feed retrieved')

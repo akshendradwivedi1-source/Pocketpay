@@ -1,4 +1,5 @@
 import logging
+import re
 from datetime import datetime
 from typing import Dict, Any, Optional
 from app.extensions import db
@@ -39,6 +40,10 @@ class TelegramHandler:
             elif "callback_query" in update:
                 cls.handle_callback_query(update["callback_query"])
         except Exception as e:
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
             logger.error(f"[Telegram] Error processing update: {str(e)}", exc_info=False)
 
     @classmethod
@@ -70,6 +75,8 @@ class TelegramHandler:
             return cls.cmd_balance(chat_id, session, user)
         elif text.startswith("/pockets"):
             return cls.cmd_pockets(chat_id, session, user)
+        elif text.startswith("/transactions"):
+            return cls.cmd_transactions(chat_id, session, user)
         elif text.startswith("/logout"):
             return cls.cmd_logout(chat_id, session)
 
@@ -89,19 +96,24 @@ class TelegramHandler:
         elif state == "WAITING_FOR_TRANSFER_PIN":
             return cls.flow_transfer_pin(chat_id, session, user, text)
         else:
-            # Default response
-            if user:
-                TelegramService.send_message(
-                    chat_id,
-                    f"👋 Hello <b>{user.full_name}</b>!\n\nUse the menu buttons below or type /help to navigate PocketPay.",
-                    reply_markup=main_menu_keyboard(is_logged_in=True)
-                )
-            else:
-                TelegramService.send_message(
-                    chat_id,
-                    "🏦 <b>Welcome to PocketPay!</b>\n\nPlease log in or create an account to get started.",
-                    reply_markup=main_menu_keyboard(is_logged_in=False)
-                )
+            # Conversational Natural Language AI Assistant (Phase 19)
+            from app.services.assistant_service import AssistantService
+            res = AssistantService.process_query(user, text, route='telegram')
+            
+            # Format message for Telegram HTML
+            msg_html = res.get('message', '')
+            msg_html = msg_html.replace('<br><br>', '\n\n').replace('<br>', '\n').replace('•', '•')
+            # Remove any unallowed HTML tags
+            msg_html = re.sub(r'</?(?:span|div|p|ul|ol|li)[^>]*>', '', msg_html)
+            
+            title = res.get('title', '')
+            full_text = f"<b>{title}</b>\n\n{msg_html}" if title else msg_html
+            
+            TelegramService.send_message(
+                chat_id,
+                full_text,
+                reply_markup=main_menu_keyboard(is_logged_in=bool(user))
+            )
 
     @classmethod
     def handle_callback_query(cls, query: Dict[str, Any]):
@@ -160,10 +172,17 @@ class TelegramHandler:
         elif data == "menu_logout":
             cls.cmd_logout(chat_id, session)
 
-        # Pocket Detail View
+        # Pocket Detail View & Actions
         elif data.startswith("pocket_view_"):
             pocket_id = int(data.replace("pocket_view_", ""))
             cls.view_pocket_detail(chat_id, user, pocket_id)
+        elif data.startswith("transfer_to_pocket_"):
+            pocket_id = int(data.replace("transfer_to_pocket_", ""))
+            cls.select_transfer_source(chat_id, session, user, "wallet")
+            cls.select_transfer_dest(chat_id, session, user, f"pocket_{pocket_id}")
+        elif data.startswith("transfer_from_pocket_"):
+            pocket_id = int(data.replace("transfer_from_pocket_", ""))
+            cls.select_transfer_source(chat_id, session, user, f"pocket_{pocket_id}")
 
         # Pocket Creation Confirmation
         elif data == "confirm_create_pocket":
@@ -395,8 +414,20 @@ class TelegramHandler:
     # =========================================================================
 
     @classmethod
-    def cmd_balance(cls, chat_id: int, session, user: User):
+    def send_auth_required(cls, chat_id: int):
+        """Standardized message for unauthenticated users"""
+        TelegramService.send_message(
+            chat_id,
+            "🔒 <b>Authentication Required</b>\n\nPlease log in to your PocketPay account to view this information.",
+            reply_markup=main_menu_keyboard(is_logged_in=False)
+        )
+
+    @classmethod
+    def cmd_balance(cls, chat_id: int, session, user: Optional[User]):
         """Retrieves and displays real database balance"""
+        if not user:
+            return cls.send_auth_required(chat_id)
+
         pockets = Pocket.query.filter_by(user_id=user.id, archived=False).all()
         pockets_total = sum(p.current_balance for p in pockets)
         total = (user.wallet_balance or 0.0) + pockets_total
@@ -412,8 +443,11 @@ class TelegramHandler:
         TelegramService.send_message(chat_id, msg, reply_markup=main_menu_keyboard(is_logged_in=True))
 
     @classmethod
-    def cmd_pockets(cls, chat_id: int, session, user: User):
+    def cmd_pockets(cls, chat_id: int, session, user: Optional[User]):
         """Lists active pockets from database"""
+        if not user:
+            return cls.send_auth_required(chat_id)
+
         pockets = Pocket.query.filter_by(user_id=user.id, archived=False).all()
 
         if not pockets:
@@ -785,8 +819,11 @@ class TelegramHandler:
     # =========================================================================
 
     @classmethod
-    def cmd_transactions(cls, chat_id: int, session, user: User):
+    def cmd_transactions(cls, chat_id: int, session, user: Optional[User]):
         """Retrieves actual recent transactions from database"""
+        if not user:
+            return cls.send_auth_required(chat_id)
+
         txs = Transaction.query.filter_by(user_id=user.id).order_by(Transaction.created_at.desc()).limit(8).all()
 
         if not txs:
@@ -799,7 +836,7 @@ class TelegramHandler:
 
         lines = ["📜 <b>Recent Transactions</b>\n"]
         for t in txs:
-            is_in = t.type in ('income', 'topup', 'refund')
+            is_in = t.type in ('income', 'topup', 'refund', 'peer_receive')
             sign = "+" if is_in else "-"
             icon = "🟢" if is_in else "🔴"
             dt_str = t.created_at.strftime("%d %b, %I:%M %p")
@@ -810,8 +847,11 @@ class TelegramHandler:
         TelegramService.send_message(chat_id, msg, reply_markup=main_menu_keyboard(is_logged_in=True))
 
     @classmethod
-    def cmd_bank(cls, chat_id: int, session, user: User):
+    def cmd_bank(cls, chat_id: int, session, user: Optional[User]):
         """Displays linked bank accounts or virtual IDs"""
+        if not user:
+            return cls.send_auth_required(chat_id)
+
         banks = user.linked_banks or []
 
         msg_lines = [
@@ -841,22 +881,28 @@ class TelegramHandler:
     # =========================================================================
 
     @classmethod
-    def cmd_account(cls, chat_id: int, session, user: User):
+    def cmd_account(cls, chat_id: int, session, user: Optional[User]):
         """Account & Settings submenu"""
+        if not user:
+            return cls.send_auth_required(chat_id)
+
         msg = (
             f"⚙️ <b>Account & Settings</b>\n\n"
             f"👤 <b>Name:</b> {user.full_name}\n"
             f"📧 <b>Email:</b> {user.email} {'(Verified ✓)' if user.email_verified else ''}\n"
             f"📱 <b>Phone:</b> {user.phone or 'Not set'}\n"
-            f"🔒 <b>Transaction PIN:</b> {'Set ✓' if user.transaction_pin_hash else 'Not set'}\n"
+            f"🔒 <b>Transaction PIN:</b> {'PIN SET ✓' if user.transaction_pin_hash else 'NO PIN'}\n"
             f"🛡️ <b>Two-Factor Auth:</b> {'Enabled ✓' if user.totp_enabled else 'Disabled'}\n"
             f"🗓️ <b>Member Since:</b> {user.created_at.strftime('%d %B %Y')}"
         )
         TelegramService.send_message(chat_id, msg, reply_markup=account_menu_keyboard())
 
     @classmethod
-    def view_profile(cls, chat_id: int, user: User):
+    def view_profile(cls, chat_id: int, user: Optional[User]):
         """Profile overview"""
+        if not user:
+            return cls.send_auth_required(chat_id)
+
         pockets_count = Pocket.query.filter_by(user_id=user.id, archived=False).count()
         tx_count = Transaction.query.filter_by(user_id=user.id).count()
 
@@ -872,20 +918,26 @@ class TelegramHandler:
         TelegramService.send_message(chat_id, msg, reply_markup=account_menu_keyboard())
 
     @classmethod
-    def view_security(cls, chat_id: int, user: User):
+    def view_security(cls, chat_id: int, user: Optional[User]):
         """Security settings overview"""
+        if not user:
+            return cls.send_auth_required(chat_id)
+
         msg = (
             f"🔒 <b>Security & Verification</b>\n\n"
             f"• <b>Email Verification:</b> {'Verified ✓' if user.email_verified else 'Pending'}\n"
-            f"• <b>Transaction PIN:</b> {'Active ✓' if user.transaction_pin_hash else 'Not set'}\n"
+            f"• <b>Transaction PIN:</b> {'PIN SET ✓' if user.transaction_pin_hash else 'NO PIN'}\n"
             f"• <b>Two-Factor TOTP (2FA):</b> {'Active ✓' if user.totp_enabled else 'Disabled'}\n\n"
             f"<i>To modify PIN or 2FA credentials, please access the PocketPay Web App.</i>"
         )
         TelegramService.send_message(chat_id, msg, reply_markup=account_menu_keyboard())
 
     @classmethod
-    def prompt_delete_account(cls, chat_id: int, session, user: User):
+    def prompt_delete_account(cls, chat_id: int, session, user: Optional[User]):
         """Enforces deletion rule: Balance must be ₹0.00"""
+        if not user:
+            return cls.send_auth_required(chat_id)
+
         pockets = Pocket.query.filter_by(user_id=user.id, archived=False).all()
         pockets_bal = sum(p.current_balance for p in pockets)
         wallet_bal = user.wallet_balance or 0.0

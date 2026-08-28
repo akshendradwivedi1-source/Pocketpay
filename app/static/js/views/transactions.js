@@ -32,6 +32,7 @@ PP.Transactions = {
       ['all', 'All'],
       ['expense', 'Expenses'],
       ['income', 'Income'],
+      ['peer_send,peer_receive', 'P2P / Peer'],
       ['transfer', 'Transfers'],
       ['topup,withdraw,refund', 'Other'],
     ].forEach(([v, l]) => {

@@ -2791,7 +2791,974 @@ PP.Modals = {
     PP.refreshIcons();
   },
 
+  // =========================================================================
+  // PEER-TO-PEER (P2P): SEND MONEY MODAL
+  // =========================================================================
+  async sendMoney(opts = {}) {
+    const user = PP.state.user;
+    if (!user) return;
+    const pockets = (PP.state.pockets || []).filter(p => !p.archived && (p.current_balance || 0) > 0);
+
+    const modal = PP.UI.modal({
+      title: 'Send Money',
+      subtitle: 'Transfer funds instantly to any PocketPay user',
+      icon: 'send',
+      iconClass: 'bg-accent',
+      size: 'md'
+    });
+
+    let recipientInput = opts.recipient || '';
+    let resolvedUser = null;
+    let searching = false;
+    let searchError = '';
+    let amountVal = opts.amount ? Number(opts.amount) : 0;
+    let selectedSource = 'wallet'; // 'wallet' or pocketId
+    let noteVal = opts.note || '';
+
+    const body = PP.el('div', { style: 'display:flex;flex-direction:column;gap:1.25rem' });
+
+    // Status / verification container (updated dynamically without touching the input)
+    const searchStatusEl = PP.el('div', { id: 'recipientSearchStatus' });
+
+    const updateStatus = () => {
+      searchStatusEl.innerHTML = '';
+      if (searching) {
+        searchStatusEl.appendChild(PP.el('div', {
+          style: 'font-size:0.8rem;color:var(--accent);display:flex;align-items:center;gap:0.4rem;margin-top:0.4rem'
+        }, [
+          PP.el('i', { 'data-lucide': 'loader-2', style: 'width:14px;height:14px;animation:slowSpin 1s linear infinite' }),
+          'Searching PocketPay network…'
+        ]));
+      } else if (resolvedUser) {
+        searchStatusEl.appendChild(PP.el('div', {
+          class: 'glass-card',
+          style: 'display:flex;align-items:center;gap:0.75rem;padding:0.75rem 1rem;background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.25);border-radius:12px;margin-top:0.5rem'
+        }, [
+          PP.el('div', {
+            class: 'avatar gradient-avatar',
+            style: 'width:38px;height:38px;font-size:1rem;flex-shrink:0'
+          }, [resolvedUser.full_name?.charAt(0)?.toUpperCase() || 'U']),
+          PP.el('div', { style: 'flex:1;min-width:0' }, [
+            PP.el('div', { style: 'font-weight:700;font-size:0.95rem;color:var(--text)' }, [resolvedUser.full_name]),
+            PP.el('div', { style: 'font-size:0.78rem;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis' }, [
+              resolvedUser.virtual_upi_id || resolvedUser.masked_email
+            ])
+          ]),
+          PP.el('span', { class: 'chip success' }, [
+            PP.el('i', { 'data-lucide': 'check-circle-2', style: 'width:12px;height:12px' }),
+            'Verified User'
+          ])
+        ]));
+      } else if (searchError && recipientInput.trim().length >= 2) {
+        searchStatusEl.appendChild(PP.el('div', {
+          style: 'font-size:0.8rem;color:var(--danger);display:flex;align-items:center;gap:0.4rem;margin-top:0.4rem'
+        }, [
+          PP.el('i', { 'data-lucide': 'alert-circle', style: 'width:14px;height:14px' }),
+          searchError
+        ]));
+      }
+      PP.refreshIcons();
+    };
+
+    const doSearch = PP.debounce(async (val) => {
+      const q = val?.trim();
+      if (!q || q.length < 2) {
+        resolvedUser = null;
+        searchError = '';
+        searching = false;
+        updateStatus();
+        return;
+      }
+      searching = true;
+      searchError = '';
+      updateStatus();
+      try {
+        const res = await PP.WalletAPI.searchUser(q);
+        resolvedUser = res.data?.user || null;
+        searchError = '';
+      } catch (err) {
+        resolvedUser = null;
+        searchError = err.message || 'User not found';
+      } finally {
+        searching = false;
+        updateStatus();
+      }
+    }, 350);
+
+    // 1. Recipient Search Input (created once, never destroyed on typing/search)
+    const recipientInp = PP.el('input', {
+      class: 'form-input',
+      id: 'sendMoneyRecipientInput',
+      placeholder: 'e.g. arjun@pocketpay.app, +919876543210, user@pocketpay',
+      value: recipientInput
+    });
+    recipientInp.oninput = (e) => {
+      recipientInput = e.target.value;
+      doSearch(recipientInput);
+    };
+
+    const searchGrp = PP.el('div', { class: 'form-group' }, [
+      PP.el('label', { class: 'form-label' }, ['Send To (Email, Phone, UPI ID, or Wallet ID) *']),
+      recipientInp,
+      searchStatusEl
+    ]);
+    body.appendChild(searchGrp);
+
+    // 2. Amount Input & Quick Chips
+    const amtInp = PP.el('input', {
+      type: 'number',
+      step: '0.01',
+      min: '1',
+      class: 'form-input',
+      style: 'font-size:1.25rem;font-weight:700',
+      placeholder: '0.00',
+      value: amountVal || ''
+    });
+    amtInp.oninput = (e) => amountVal = parseFloat(e.target.value) || 0;
+
+    const amtGrp = PP.el('div', { class: 'form-group' }, [
+      PP.el('label', { class: 'form-label' }, ['Amount to Send *']),
+      amtInp,
+      PP.el('div', { class: 'quick-chips', style: 'display:flex;gap:0.4rem;margin-top:0.5rem;flex-wrap:wrap' }, [
+        ...[100, 250, 500, 1000, 2000, 5000].map(v => {
+          const btn = PP.el('button', {
+            type: 'button',
+            class: 'chip',
+            style: 'cursor:pointer;background:var(--surface-2);border:1px solid var(--border)',
+            onclick: () => {
+              amountVal = v;
+              amtInp.value = v;
+            }
+          }, [`₹${v}`]);
+          return btn;
+        })
+      ])
+    ]);
+    body.appendChild(amtGrp);
+
+    // 3. Source Selection (Wallet or Pocket)
+    const srcSel = PP.el('select', { class: 'form-select' });
+    const walletOpt = PP.el('option', { value: 'wallet' }, [`💳 Available Balance (₹${(user.wallet_balance || 0).toLocaleString('en-IN', {minimumFractionDigits:2})})`]);
+    if (selectedSource === 'wallet') walletOpt.selected = true;
+    srcSel.appendChild(walletOpt);
+
+    pockets.forEach(p => {
+      const opt = PP.el('option', { value: p.id }, [`📁 ${p.name} (₹${(p.current_balance || 0).toLocaleString('en-IN', {minimumFractionDigits:2})})`]);
+      if (String(selectedSource) === String(p.id)) opt.selected = true;
+      srcSel.appendChild(opt);
+    });
+
+    srcSel.onchange = (e) => selectedSource = e.target.value;
+
+    const srcGrp = PP.el('div', { class: 'form-group' }, [
+      PP.el('label', { class: 'form-label' }, ['Payment Source']),
+      srcSel
+    ]);
+    body.appendChild(srcGrp);
+
+    // 4. Note (optional)
+    const noteInp = PP.el('input', {
+      type: 'text',
+      class: 'form-input',
+      placeholder: 'e.g. Lunch split, Trip contribution, Birthday gift',
+      maxlength: 100,
+      value: noteVal
+    });
+    noteInp.oninput = (e) => noteVal = e.target.value;
+
+    body.appendChild(PP.el('div', { class: 'form-group' }, [
+      PP.el('label', { class: 'form-label' }, ['Note / Reference (optional)']),
+      noteInp
+    ]));
+
+    modal.body.innerHTML = '';
+    modal.body.appendChild(body);
+
+    // Footer
+    modal.footer.innerHTML = '';
+    modal.footer.appendChild(PP.el('button', {
+      class: 'btn btn-ghost',
+      onclick: () => modal.close()
+    }, ['Cancel']));
+
+    const submitBtn = PP.el('button', {
+      class: 'btn btn-primary',
+      onclick: async () => {
+        if (!recipientInput.trim()) {
+          return PP.UI.toast('Recipient Required', 'Please enter a recipient email, phone, or UPI ID', 'warning');
+        }
+        if (!amountVal || amountVal <= 0) {
+          return PP.UI.toast('Invalid Amount', 'Please enter an amount greater than ₹0', 'warning');
+        }
+
+        // Check balance before asking for PIN
+        let available = user.wallet_balance || 0;
+        if (selectedSource !== 'wallet') {
+          const p = pockets.find(x => String(x.id) === String(selectedSource));
+          available = p?.current_balance || 0;
+        }
+        if (available < amountVal) {
+          return PP.UI.toast('Insufficient Balance', `You only have ₹${available.toLocaleString('en-IN', {minimumFractionDigits:2})} in selected source`, 'error');
+        }
+
+        // Prompt PIN & optional TOTP
+        PP.Modals.promptPin({
+          title: 'Confirm Payment',
+          subtitle: `Authorizing ₹${amountVal.toLocaleString('en-IN', {minimumFractionDigits:2})} to ${resolvedUser?.full_name || recipientInput}`,
+          amount: amountVal,
+          requireTotp: !!user.totp_enabled,
+          onConfirm: async (authPayload) => {
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<i data-lucide="loader-2" style="animation:slowSpin 1s linear infinite"></i> Processing Transfer…';
+            PP.refreshIcons();
+            try {
+              const res = await PP.WalletAPI.sendMoney({
+                recipient: recipientInput.trim(),
+                amount: amountVal,
+                pocket_id: selectedSource === 'wallet' ? null : parseInt(selectedSource),
+                note: noteVal,
+                pin: authPayload.pin,
+                totp_code: authPayload.totp_code
+              });
+
+              modal.close();
+              await PP.loadState?.();
+              PP.renderView?.();
+
+              PP.UI.showSuccess({
+                title: 'Money Sent Successfully!',
+                sub: `₹${amountVal.toLocaleString('en-IN', {minimumFractionDigits:2})} transferred to ${res.data?.recipient?.full_name || recipientInput}`,
+                meta: [
+                  { label: 'Recipient', value: res.data?.recipient?.full_name || recipientInput },
+                  { label: 'Amount', value: `₹${amountVal.toLocaleString('en-IN', {minimumFractionDigits:2})}` },
+                  { label: 'Transaction ID', value: res.data?.transaction?.transaction_id || '—' },
+                ]
+              });
+
+              if (res.data?.transaction) {
+                setTimeout(() => PP.Modals.transactionDetail?.(res.data.transaction), 2400);
+              }
+            } catch (err) {
+              PP.UI.toast('Transfer Failed', err.message || 'Payment could not be processed', 'error');
+              submitBtn.disabled = false;
+              submitBtn.innerHTML = '<i data-lucide="send"></i> Send Money';
+              PP.refreshIcons();
+            }
+          }
+        });
+      }
+    }, [PP.el('i', { 'data-lucide': 'send' }), 'Send Money']);
+    modal.footer.appendChild(submitBtn);
+
+    PP.refreshIcons();
+    if (recipientInput) doSearch(recipientInput);
+  },
+
+  // =========================================================================
+  // PEER-TO-PEER (P2P): REQUEST MONEY MODAL
+  // =========================================================================
+  async requestMoney(opts = {}) {
+    const user = PP.state.user;
+    if (!user) return;
+
+    const modal = PP.UI.modal({
+      title: 'Request Money',
+      subtitle: 'Send a payment request to another PocketPay user',
+      icon: 'hand-coins',
+      iconClass: 'bg-info',
+      size: 'md'
+    });
+
+    let recipientInput = opts.recipient || '';
+    let resolvedUser = null;
+    let searching = false;
+    let searchError = '';
+    let amountVal = opts.amount ? Number(opts.amount) : 0;
+    let noteVal = opts.note || '';
+
+    const doSearch = PP.debounce(async (val) => {
+      const q = val?.trim();
+      if (!q || q.length < 2) {
+        resolvedUser = null;
+        searchError = '';
+        searching = false;
+        render();
+        return;
+      }
+      searching = true;
+      searchError = '';
+      render();
+      try {
+        const res = await PP.WalletAPI.searchUser(q);
+        resolvedUser = res.data?.user || null;
+        searchError = '';
+      } catch (err) {
+        resolvedUser = null;
+        searchError = err.message || 'User not found';
+      } finally {
+        searching = false;
+        render();
+      }
+    }, 350);
+
+    const render = () => {
+      const body = PP.el('div', { style: 'display:flex;flex-direction:column;gap:1.25rem' });
+
+      // 1. Recipient Search
+      const searchGrp = PP.el('div', { class: 'form-group' }, [
+        PP.el('label', { class: 'form-label' }, ['Request From (Email, Phone, UPI ID, or Wallet ID) *']),
+        (() => {
+          const inp = PP.el('input', {
+            class: 'form-input',
+            placeholder: 'e.g. friend@pocketpay.app, +919876543210',
+            value: recipientInput
+          });
+          inp.oninput = (e) => {
+            recipientInput = e.target.value;
+            doSearch(recipientInput);
+          };
+          return inp;
+        })()
+      ]);
+
+      if (searching) {
+        searchGrp.appendChild(PP.el('div', {
+          style: 'font-size:0.8rem;color:var(--accent);display:flex;align-items:center;gap:0.4rem;margin-top:0.4rem'
+        }, [
+          PP.el('i', { 'data-lucide': 'loader-2', style: 'width:14px;height:14px;animation:slowSpin 1s linear infinite' }),
+          'Searching PocketPay network…'
+        ]));
+      } else if (resolvedUser) {
+        searchGrp.appendChild(PP.el('div', {
+          class: 'glass-card',
+          style: 'display:flex;align-items:center;gap:0.75rem;padding:0.75rem 1rem;background:rgba(14,165,233,0.08);border:1px solid rgba(14,165,233,0.25);border-radius:12px;margin-top:0.5rem'
+        }, [
+          PP.el('div', {
+            class: 'avatar gradient-avatar',
+            style: 'width:38px;height:38px;font-size:1rem;flex-shrink:0'
+          }, [resolvedUser.full_name?.charAt(0)?.toUpperCase() || 'U']),
+          PP.el('div', { style: 'flex:1;min-width:0' }, [
+            PP.el('div', { style: 'font-weight:700;font-size:0.95rem;color:var(--text)' }, [resolvedUser.full_name]),
+            PP.el('div', { style: 'font-size:0.78rem;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis' }, [
+              resolvedUser.virtual_upi_id || resolvedUser.masked_email
+            ])
+          ]),
+          PP.el('span', { class: 'chip info' }, ['Verified User'])
+        ]));
+      } else if (searchError && recipientInput.trim().length >= 2) {
+        searchGrp.appendChild(PP.el('div', {
+          style: 'font-size:0.8rem;color:var(--danger);display:flex;align-items:center;gap:0.4rem;margin-top:0.4rem'
+        }, [
+          PP.el('i', { 'data-lucide': 'alert-circle', style: 'width:14px;height:14px' }),
+          searchError
+        ]));
+      }
+      body.appendChild(searchGrp);
+
+      // 2. Amount Input
+      body.appendChild(PP.el('div', { class: 'form-group' }, [
+        PP.el('label', { class: 'form-label' }, ['Amount to Request *']),
+        (() => {
+          const inp = PP.el('input', {
+            type: 'number',
+            step: '0.01',
+            min: '1',
+            class: 'form-input',
+            style: 'font-size:1.25rem;font-weight:700',
+            placeholder: '0.00',
+            value: amountVal || ''
+          });
+          inp.oninput = (e) => amountVal = parseFloat(e.target.value) || 0;
+          return inp;
+        })()
+      ]));
+
+      // 3. Note
+      body.appendChild(PP.el('div', { class: 'form-group' }, [
+        PP.el('label', { class: 'form-label' }, ['Purpose / Note *']),
+        (() => {
+          const inp = PP.el('input', {
+            type: 'text',
+            class: 'form-input',
+            placeholder: 'e.g. Dinner bill split, Grocery share, Cab fare',
+            maxlength: 100,
+            value: noteVal
+          });
+          inp.oninput = (e) => noteVal = e.target.value;
+          return inp;
+        })()
+      ]));
+
+      modal.body.innerHTML = '';
+      modal.body.appendChild(body);
+
+      // Footer
+      modal.footer.innerHTML = '';
+      modal.footer.appendChild(PP.el('button', {
+        class: 'btn btn-ghost',
+        onclick: () => modal.close()
+      }, ['Cancel']));
+
+      const submitBtn = PP.el('button', {
+        class: 'btn btn-primary',
+        onclick: async () => {
+          if (!recipientInput.trim()) {
+            return PP.UI.toast('Recipient Required', 'Please enter user email, phone, or UPI ID', 'warning');
+          }
+          if (!amountVal || amountVal <= 0) {
+            return PP.UI.toast('Invalid Amount', 'Please enter an amount greater than ₹0', 'warning');
+          }
+          if (!noteVal.trim()) {
+            return PP.UI.toast('Note Required', 'Please specify a brief note for the request', 'warning');
+          }
+
+          submitBtn.disabled = true;
+          submitBtn.innerHTML = '<i data-lucide="loader-2" style="animation:slowSpin 1s linear infinite"></i> Sending Request…';
+          PP.refreshIcons();
+          try {
+            await PP.WalletAPI.requestMoney({
+              recipient: recipientInput.trim(),
+              amount: amountVal,
+              note: noteVal.trim()
+            });
+
+            modal.close();
+            PP.UI.toast('Request Sent', `Money request for ₹${amountVal.toLocaleString('en-IN', {minimumFractionDigits:2})} sent to ${resolvedUser?.full_name || recipientInput}`, 'success');
+            await PP.loadState?.();
+            PP.renderView?.();
+          } catch (err) {
+            PP.UI.toast('Request Failed', err.message || 'Could not send money request', 'error');
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<i data-lucide="hand-coins"></i> Send Request';
+            PP.refreshIcons();
+          }
+        }
+      }, [PP.el('i', { 'data-lucide': 'hand-coins' }), 'Send Request']);
+      modal.footer.appendChild(submitBtn);
+
+      PP.refreshIcons();
+    };
+
+    render();
+    if (recipientInput) doSearch(recipientInput);
+  },
+
+  // =========================================================================
+  // PEER-TO-PEER (P2P): MONEY REQUESTS MANAGER MODAL
+  // =========================================================================
+  async moneyRequests(defaultTab = 'incoming') {
+    const user = PP.state.user;
+    if (!user) return;
+
+    const modal = PP.UI.modal({
+      title: 'Money Requests',
+      subtitle: 'Manage received and sent payment requests',
+      icon: 'arrow-down-left',
+      iconClass: 'bg-accent',
+      size: 'lg'
+    });
+
+    let currentTab = defaultTab;
+    let requests = [];
+    let loading = true;
+
+    const loadData = async () => {
+      loading = true;
+      render();
+      try {
+        const res = await PP.WalletAPI.listRequests({ type: currentTab });
+        requests = res.data?.requests || [];
+      } catch (err) {
+        PP.UI.toast('Error', 'Failed to load money requests', 'error');
+        requests = [];
+      } finally {
+        loading = false;
+        render();
+      }
+    };
+
+    const render = () => {
+      const body = PP.el('div', { style: 'display:flex;flex-direction:column;gap:1rem' });
+
+      // Tab switcher
+      const tabWrap = PP.el('div', {
+        style: 'display:flex;gap:0.5rem;background:var(--surface-2);padding:4px;border-radius:12px;border:1px solid var(--border)'
+      }, [
+        PP.el('button', {
+          class: `btn btn-sm ${currentTab === 'incoming' ? 'btn-primary' : 'btn-ghost'}`,
+          style: 'flex:1;font-weight:600',
+          onclick: () => { currentTab = 'incoming'; loadData(); }
+        }, ['📥 Incoming Requests']),
+        PP.el('button', {
+          class: `btn btn-sm ${currentTab === 'outgoing' ? 'btn-primary' : 'btn-ghost'}`,
+          style: 'flex:1;font-weight:600',
+          onclick: () => { currentTab = 'outgoing'; loadData(); }
+        }, ['📤 Sent Requests'])
+      ]);
+      body.appendChild(tabWrap);
+
+      if (loading) {
+        body.appendChild(PP.el('div', {
+          style: 'padding:2.5rem;text-align:center;color:var(--text-muted)'
+        }, [
+          PP.el('i', { 'data-lucide': 'loader-2', style: 'width:28px;height:28px;animation:slowSpin 1s linear infinite;margin-bottom:0.5rem' }),
+          PP.el('p', {}, ['Loading money requests…'])
+        ]));
+      } else if (!requests.length) {
+        body.appendChild(PP.el('div', {
+          class: 'empty-state',
+          style: 'padding:2.5rem 1rem;text-align:center'
+        }, [
+          PP.el('div', {
+            style: 'width:56px;height:56px;border-radius:16px;background:rgba(99,102,241,0.12);color:var(--accent);display:flex;align-items:center;justify-content:center;margin:0 auto 1rem'
+          }, [PP.el('i', { 'data-lucide': currentTab === 'incoming' ? 'inbox' : 'send', style: 'width:28px;height:28px' })]),
+          PP.el('h4', { style: 'font-weight:700;margin-bottom:0.35rem' }, [currentTab === 'incoming' ? 'No incoming requests' : 'No outgoing requests']),
+          PP.el('p', { style: 'color:var(--text-muted);font-size:0.85rem;max-width:320px;margin:0 auto 1rem' }, [
+            currentTab === 'incoming'
+              ? 'When other PocketPay users request money from you, they will appear here.'
+              : 'You have not sent any pending money requests yet.'
+          ]),
+          PP.el('button', {
+            class: 'btn btn-primary btn-sm',
+            onclick: () => { modal.close(); PP.Modals.requestMoney(); }
+          }, [PP.el('i', { 'data-lucide': 'plus' }), 'Request Money'])
+        ]));
+      } else {
+        const list = PP.el('div', { style: 'display:flex;flex-direction:column;gap:0.75rem;max-height:420px;overflow-y:auto;padding-right:4px' });
+
+        requests.forEach(req => {
+          const isPending = req.status === 'pending';
+          const isIncoming = currentTab === 'incoming';
+          const otherName = isIncoming ? req.requester_name : req.target_user_name;
+          const otherUpi = isIncoming ? (req.requester_upi || req.requester_email) : (req.target_user_upi || req.target_user_email);
+
+          const card = PP.el('div', {
+            class: 'glass-card',
+            style: `display:flex;flex-direction:column;gap:0.6rem;padding:1rem;border-radius:14px;border:1px solid ${isPending ? 'rgba(99,102,241,0.25)' : 'var(--border)'}`
+          }, [
+            PP.el('div', { style: 'display:flex;justify-content:space-between;align-items:flex-start;gap:0.75rem' }, [
+              PP.el('div', { style: 'display:flex;align-items:center;gap:0.65rem' }, [
+                PP.el('div', {
+                  class: 'avatar gradient-avatar',
+                  style: 'width:38px;height:38px;font-size:0.95rem;flex-shrink:0'
+                }, [otherName?.charAt(0)?.toUpperCase() || 'U']),
+                PP.el('div', {}, [
+                  PP.el('div', { style: 'font-weight:700;font-size:0.95rem' }, [
+                    isIncoming ? `Request from ${otherName}` : `Requested from ${otherName}`
+                  ]),
+                  PP.el('div', { style: 'font-size:0.75rem;color:var(--text-muted)' }, [otherUpi || 'PocketPay User'])
+                ])
+              ]),
+              PP.el('div', { style: 'text-align:right' }, [
+                PP.el('div', { style: 'font-size:1.15rem;font-weight:800;font-family:var(--font-display);color:var(--text)' }, [
+                  `₹${(req.amount || 0).toLocaleString('en-IN', {minimumFractionDigits:2})}`
+                ]),
+                PP.el('span', {
+                  class: `chip ${req.status === 'paid' ? 'success' : (req.status === 'declined' ? 'danger' : 'warning')}`,
+                  style: 'margin-top:0.25rem;font-size:0.7rem'
+                }, [req.status?.toUpperCase()])
+              ])
+            ]),
+            req.note ? PP.el('div', {
+              style: 'font-size:0.83rem;color:var(--text-muted);background:rgba(255,255,255,0.03);padding:0.4rem 0.65rem;border-radius:8px'
+            }, [`💬 "${req.note}"`]) : null,
+            PP.el('div', {
+              style: 'display:flex;justify-content:space-between;align-items:center;font-size:0.75rem;color:var(--text-dim);margin-top:0.2rem'
+            }, [
+              PP.el('span', {}, [PP.formatDateTime ? PP.formatDateTime(req.created_at) : String(req.created_at || '')]),
+              (isIncoming && isPending) ? PP.el('div', { style: 'display:flex;gap:0.4rem' }, [
+                PP.el('button', {
+                  class: 'btn btn-danger btn-sm',
+                  style: 'padding:0.35rem 0.75rem;font-size:0.78rem',
+                  onclick: async () => {
+                    if (!confirm(`Decline request of ₹${req.amount} from ${otherName}?`)) return;
+                    try {
+                      await PP.WalletAPI.declineRequest(req.id);
+                      PP.UI.toast('Declined', 'Money request declined', 'info');
+                      loadData();
+                    } catch (err) {
+                      PP.UI.toast('Error', err.message || 'Could not decline request', 'error');
+                    }
+                  }
+                }, ['Decline']),
+                PP.el('button', {
+                  class: 'btn btn-primary btn-sm',
+                  style: 'padding:0.35rem 0.9rem;font-size:0.78rem',
+                  onclick: () => {
+                    PP.Modals.promptPin({
+                      title: 'Pay Money Request',
+                      subtitle: `Paying ₹${req.amount.toLocaleString('en-IN', {minimumFractionDigits:2})} to ${otherName}`,
+                      amount: req.amount,
+                      requireTotp: !!user.totp_enabled,
+                      onConfirm: async (authPayload) => {
+                        try {
+                          await PP.WalletAPI.payRequest(req.id, authPayload.pin, { totp_code: authPayload.totp_code });
+                          modal.close();
+                          await PP.loadState?.();
+                          PP.renderView?.();
+                          PP.UI.showSuccess({
+                            title: 'Request Paid Successfully!',
+                            sub: `₹${req.amount.toLocaleString('en-IN', {minimumFractionDigits:2})} sent to ${otherName}`,
+                            meta: [
+                              { label: 'Paid To', value: otherName },
+                              { label: 'Amount', value: `₹${req.amount.toLocaleString('en-IN', {minimumFractionDigits:2})}` },
+                              { label: 'Note', value: req.note || 'Payment Request' }
+                            ]
+                          });
+                        } catch (err) {
+                          PP.UI.toast('Payment Failed', err.message || 'Could not pay request', 'error');
+                        }
+                      }
+                    });
+                  }
+                }, [PP.el('i', { 'data-lucide': 'check' }), 'Pay Now'])
+              ]) : null
+            ].filter(Boolean))
+          ].filter(Boolean));
+
+          list.appendChild(card);
+        });
+
+        body.appendChild(list);
+      }
+
+      modal.body.innerHTML = '';
+      modal.body.appendChild(body);
+
+      modal.footer.innerHTML = '';
+      modal.footer.appendChild(PP.el('button', {
+        class: 'btn btn-ghost',
+        onclick: () => modal.close()
+      }, ['Close']));
+
+      modal.footer.appendChild(PP.el('button', {
+        class: 'btn btn-primary',
+        onclick: () => { modal.close(); PP.Modals.requestMoney(); }
+      }, [PP.el('i', { 'data-lucide': 'plus' }), 'New Request']));
+
+      PP.refreshIcons();
+    };
+
+    loadData();
+  },
+
+  // =========================================================================
+  // NOTIFICATIONS CENTER MODAL
+  // =========================================================================
+  async notifications() {
+    const modal = PP.UI.modal({
+      title: 'Notifications',
+      subtitle: 'Activity, transactions, and security alerts',
+      icon: 'bell',
+      iconClass: 'bg-accent',
+      size: 'md'
+    });
+
+    let notifs = [];
+    let loading = true;
+
+    const loadData = async () => {
+      loading = true;
+      render();
+      try {
+        const res = await PP.AnalyticsAPI.notifications({ limit: 40 });
+        notifs = res.data?.items || [];
+      } catch (err) {
+        notifs = PP.state.notifications || [];
+      } finally {
+        loading = false;
+        render();
+      }
+    };
+
+    const render = () => {
+      const body = PP.el('div', { style: 'display:flex;flex-direction:column;gap:0.75rem' });
+
+      // Actions Header
+      body.appendChild(PP.el('div', {
+        style: 'display:flex;justify-content:space-between;align-items:center;margin-bottom:0.25rem'
+      }, [
+        PP.el('span', { style: 'font-size:0.8rem;color:var(--text-muted);font-weight:600' }, [
+          `${notifs.filter(n => !n.is_read).length} unread alerts`
+        ]),
+        PP.el('button', {
+          type: 'button',
+          class: 'btn btn-ghost btn-sm',
+          style: 'font-size:0.75rem;padding:0.2rem 0.5rem',
+          onclick: async () => {
+            try {
+              await PP.AnalyticsAPI.readAll();
+              notifs.forEach(n => n.is_read = true);
+              const badge = PP.$('#notifBadge');
+              if (badge) badge.classList.add('hidden');
+              render();
+              PP.UI.toast('Marked Read', 'All notifications marked as read', 'info');
+            } catch (err) {
+              PP.UI.toast('Error', 'Failed to mark all as read', 'error');
+            }
+          }
+        }, ['Mark all as read'])
+      ]));
+
+      if (loading) {
+        body.appendChild(PP.el('div', { style: 'padding:2rem;text-align:center;color:var(--text-muted)' }, [
+          PP.el('i', { 'data-lucide': 'loader-2', style: 'width:24px;height:24px;animation:slowSpin 1s linear infinite' })
+        ]));
+      } else if (!notifs.length) {
+        body.appendChild(PP.el('div', {
+          class: 'empty-state',
+          style: 'padding:2.5rem 1rem;text-align:center'
+        }, [
+          PP.el('div', {
+            style: 'width:48px;height:48px;border-radius:14px;background:rgba(99,102,241,0.12);color:var(--accent);display:flex;align-items:center;justify-content:center;margin:0 auto 0.75rem'
+          }, [PP.el('i', { 'data-lucide': 'bell-off', style: 'width:24px;height:24px' })]),
+          PP.el('h4', { style: 'font-weight:700;margin-bottom:0.25rem' }, ['All caught up!']),
+          PP.el('p', { style: 'color:var(--text-muted);font-size:0.85rem' }, ['No notifications or alerts right now.'])
+        ]));
+      } else {
+        const list = PP.el('div', {
+          style: 'display:flex;flex-direction:column;gap:0.5rem;max-height:420px;overflow-y:auto;padding-right:4px'
+        });
+
+        notifs.forEach(n => {
+          const isUnread = !n.is_read;
+          let iconName = 'info';
+          let iconColor = 'var(--info)';
+          if (n.type === 'success' || (n.title && n.title.includes('Success'))) { iconName = 'check-circle'; iconColor = 'var(--success)'; }
+          else if (n.type === 'warning' || (n.title && n.title.includes('Alert')) || (n.title && n.title.includes('Budget'))) { iconName = 'alert-triangle'; iconColor = 'var(--warning)'; }
+          else if (n.type === 'danger' || (n.title && n.title.includes('Failed'))) { iconName = 'alert-circle'; iconColor = 'var(--danger)'; }
+          else if (n.title && (n.title.includes('Received') || n.title.includes('Sent'))) { iconName = 'arrow-left-right'; iconColor = 'var(--accent)'; }
+
+          const item = PP.el('div', {
+            class: 'glass-card',
+            style: `display:flex;align-items:flex-start;gap:0.75rem;padding:0.75rem 1rem;border-radius:12px;cursor:pointer;transition:all .2s;${isUnread ? 'background:rgba(99,102,241,0.06);border:1px solid rgba(99,102,241,0.25);' : 'background:rgba(255,255,255,0.02);border:1px solid var(--border);'}`,
+            onclick: async () => {
+              if (isUnread) {
+                try {
+                  await PP.AnalyticsAPI.markRead(n.id);
+                  n.is_read = true;
+                  render();
+                } catch {}
+              }
+            }
+          }, [
+            PP.el('div', {
+              style: `width:34px;height:34px;border-radius:10px;background:rgba(255,255,255,0.06);color:${iconColor};display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:2px`
+            }, [PP.el('i', { 'data-lucide': iconName, style: 'width:18px;height:18px' })]),
+            PP.el('div', { style: 'flex:1;min-width:0' }, [
+              PP.el('div', { style: 'display:flex;justify-content:space-between;align-items:center;gap:0.5rem' }, [
+                PP.el('h5', { style: `font-weight:700;font-size:0.88rem;color:${isUnread ? 'var(--text)' : 'var(--text-muted)'}` }, [n.title]),
+                isUnread ? PP.el('span', { style: 'width:8px;height:8px;border-radius:50%;background:var(--accent);flex-shrink:0' }) : null
+              ].filter(Boolean)),
+              PP.el('p', { style: 'font-size:0.8rem;color:var(--text-muted);margin:0.2rem 0 0.35rem;line-height:1.35' }, [n.message]),
+              PP.el('span', { style: 'font-size:0.72rem;color:var(--text-dim)' }, [
+                PP.formatTimeAgo ? PP.formatTimeAgo(n.created_at) : String(n.created_at || '')
+              ])
+            ])
+          ]);
+
+          list.appendChild(item);
+        });
+
+        body.appendChild(list);
+      }
+
+      modal.body.innerHTML = '';
+      modal.body.appendChild(body);
+
+      modal.footer.innerHTML = '';
+      modal.footer.appendChild(PP.el('button', {
+        class: 'btn btn-ghost',
+        onclick: () => modal.close()
+      }, ['Close']));
+
+      PP.refreshIcons();
+    };
+
+    loadData();
+  },
+
+  // =========================================================================
+  // SAVINGS GOALS: CREATE & FUND MODALS (Phase 11)
+  // =========================================================================
+  async createGoal(existing = null) {
+    const editing = !!existing;
+    let nameVal = editing ? existing.name : '';
+    let targetVal = editing ? existing.target_amount : '';
+    let dateVal = editing ? (existing.target_date || '') : '';
+    let categoryVal = editing ? (existing.category || 'General') : 'General';
+    let colorVal = editing ? (existing.color || '#6366f1') : '#6366f1';
+
+    const modal = PP.UI.modal({
+      title: editing ? 'Edit Savings Goal' : 'Create Savings Goal',
+      subtitle: 'Set a target and track your progress to financial milestones',
+      icon: 'target',
+      iconClass: 'bg-accent',
+      size: 'md'
+    });
+
+    const body = PP.el('div', { style: 'display:flex;flex-direction:column;gap:1rem' }, [
+      PP.el('div', { class: 'form-group' }, [
+        PP.el('label', { class: 'form-label' }, ['Goal Name *']),
+        (() => {
+          const inp = PP.el('input', { class: 'form-input', placeholder: 'e.g. New Laptop, Emergency Fund, Vacation', value: nameVal });
+          inp.oninput = () => nameVal = inp.value;
+          return inp;
+        })()
+      ]),
+      PP.el('div', { class: 'form-group' }, [
+        PP.el('label', { class: 'form-label' }, ['Target Amount (₹) *']),
+        (() => {
+          const inp = PP.el('input', { type: 'number', class: 'form-input', placeholder: 'e.g. 50000', value: targetVal });
+          inp.oninput = () => targetVal = inp.value;
+          return inp;
+        })()
+      ]),
+      PP.el('div', { class: 'form-row' }, [
+        PP.el('div', { class: 'form-group' }, [
+          PP.el('label', { class: 'form-label' }, ['Category']),
+          (() => {
+            const sel = PP.el('select', { class: 'form-select' }, [
+              PP.el('option', { value: 'General' }, ['General']),
+              PP.el('option', { value: 'Tech & Gadgets' }, ['Tech & Gadgets']),
+              PP.el('option', { value: 'Travel & Vacation' }, ['Travel & Vacation']),
+              PP.el('option', { value: 'Vehicle & Auto' }, ['Vehicle & Auto']),
+              PP.el('option', { value: 'Emergency Fund' }, ['Emergency Fund']),
+              PP.el('option', { value: 'Education' }, ['Education']),
+              PP.el('option', { value: 'Home & Real Estate' }, ['Home & Real Estate'])
+            ]);
+            sel.value = categoryVal;
+            sel.onchange = () => categoryVal = sel.value;
+            return sel;
+          })()
+        ]),
+        PP.el('div', { class: 'form-group' }, [
+          PP.el('label', { class: 'form-label' }, ['Target Date (Optional)']),
+          (() => {
+            const inp = PP.el('input', { type: 'date', class: 'form-input', value: dateVal });
+            inp.oninput = () => dateVal = inp.value;
+            return inp;
+          })()
+        ])
+      ])
+    ]);
+
+    modal.body.innerHTML = '';
+    modal.body.appendChild(body);
+
+    modal.footer.innerHTML = '';
+    modal.footer.appendChild(PP.el('button', {
+      class: 'btn btn-ghost',
+      onclick: () => modal.close()
+    }, ['Cancel']));
+
+    const submitBtn = PP.el('button', {
+      class: 'btn btn-primary',
+      onclick: async () => {
+        if (!nameVal.trim()) return PP.UI.toast('Validation Error', 'Please enter a goal name', 'warning');
+        const amt = parseFloat(targetVal);
+        if (!amt || amt <= 0) return PP.UI.toast('Validation Error', 'Target amount must be greater than ₹0', 'warning');
+
+        try {
+          submitBtn.disabled = true;
+          submitBtn.textContent = 'Saving...';
+          const payload = {
+            name: nameVal.trim(),
+            target_amount: amt,
+            category: categoryVal,
+            target_date: dateVal || null,
+            color: colorVal
+          };
+
+          if (editing) {
+            await PP.GoalsAPI.update(existing.id, payload);
+            PP.UI.toast('Goal Updated', `"${nameVal}" updated successfully`, 'success');
+          } else {
+            await PP.GoalsAPI.create(payload);
+            PP.UI.toast('Goal Created', `"${nameVal}" created! Start saving now.`, 'success');
+          }
+
+          modal.close();
+          await PP.loadState?.();
+          PP.renderView?.();
+        } catch (err) {
+          PP.UI.toast('Error', err.message || 'Could not save goal', 'error');
+          submitBtn.disabled = false;
+          submitBtn.textContent = editing ? 'Update Goal' : 'Create Goal';
+        }
+      }
+    }, [editing ? 'Update Goal' : 'Create Goal']);
+    modal.footer.appendChild(submitBtn);
+    PP.refreshIcons();
+  },
+
+  async depositGoal(goal) {
+    let amountVal = '';
+    let sourceVal = 'wallet';
+    const pockets = PP.state.pockets || [];
+
+    const modal = PP.UI.modal({
+      title: `Add Money to "${goal.name}"`,
+      subtitle: `Target: ₹${goal.target_amount.toLocaleString('en-IN')} | Saved: ₹${goal.current_amount.toLocaleString('en-IN')}`,
+      icon: 'plus-circle',
+      iconClass: 'bg-success',
+      size: 'sm'
+    });
+
+    const body = PP.el('div', { style: 'display:flex;flex-direction:column;gap:1rem' }, [
+      PP.el('div', { class: 'form-group' }, [
+        PP.el('label', { class: 'form-label' }, ['Deposit Amount (₹) *']),
+        (() => {
+          const inp = PP.el('input', { type: 'number', class: 'form-input', placeholder: 'Enter amount to save', autofocus: true });
+          inp.oninput = () => amountVal = inp.value;
+          return inp;
+        })()
+      ]),
+      PP.el('div', { class: 'form-group' }, [
+        PP.el('label', { class: 'form-label' }, ['Funding Source']),
+        (() => {
+          const sel = PP.el('select', { class: 'form-select' }, [
+            PP.el('option', { value: 'wallet' }, [`Main Available Balance (₹${(PP.state.user?.wallet_balance || 0).toLocaleString('en-IN')})`]),
+            ...pockets.map(p => PP.el('option', { value: String(p.id) }, [`Pocket: ${p.name} (₹${p.current_balance.toLocaleString('en-IN')})`]))
+          ]);
+          sel.onchange = () => sourceVal = sel.value;
+          return sel;
+        })()
+      ])
+    ]);
+
+    modal.body.innerHTML = '';
+    modal.body.appendChild(body);
+
+    modal.footer.innerHTML = '';
+    modal.footer.appendChild(PP.el('button', { class: 'btn btn-ghost', onclick: () => modal.close() }, ['Cancel']));
+
+    const submitBtn = PP.el('button', {
+      class: 'btn btn-success',
+      onclick: async () => {
+        const amt = parseFloat(amountVal);
+        if (!amt || amt <= 0) return PP.UI.toast('Validation Error', 'Please enter a valid amount to deposit', 'warning');
+
+        try {
+          submitBtn.disabled = true;
+          submitBtn.textContent = 'Depositing...';
+          await PP.GoalsAPI.deposit(goal.id, amt, sourceVal);
+          PP.UI.toast('Deposit Success', `₹${amt.toLocaleString('en-IN')} deposited to "${goal.name}"`, 'success');
+          modal.close();
+          await PP.loadState?.();
+          PP.renderView?.();
+        } catch (err) {
+          PP.UI.toast('Deposit Failed', err.message || 'Could not complete deposit', 'error');
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'Confirm Deposit';
+        }
+      }
+    }, ['Confirm Deposit']);
+    modal.footer.appendChild(submitBtn);
+    PP.refreshIcons();
+  }
 };
+
 
 // Backward compatibility aliases
 PP.Modals.setupPIN = PP.Modals.setupPin;

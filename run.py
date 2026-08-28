@@ -26,4 +26,12 @@ if __name__ == '__main__':
   URL: http://localhost:{:<5d}
 ====================================================================
 """.format(port))
+
+    # Auto-start Telegram poller in background thread if configured
+    try:
+        from app.telegram.poller import start_background_poller
+        start_background_poller(app)
+    except Exception as e:
+        print(f"[Telegram] Could not auto-start poller: {e}")
+        
     app.run(host=host, port=port, debug=debug, use_reloader=False)

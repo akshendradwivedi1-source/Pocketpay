@@ -43,7 +43,7 @@
     <div class="nav-inner">
       <div class="nav-left">
         <button id="sidebarToggle" class="icon-btn sidebar-toggle hidden-md" aria-label="Toggle menu">
-          <i data-lucide="menu"></i>
+          <i data-lucide="menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-menu"><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></svg></i>
         </button>
         <a href="#" class="logo" data-route="dashboard">
           <div class="logo-mark">
@@ -57,18 +57,18 @@
       </div>
       <div class="nav-center hidden-sm">
         <div class="search-box">
-          <i data-lucide="search" class="search-icon"></i>
+          <i data-lucide="search" class="search-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-search"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg></i>
           <input id="globalSearch" type="text" placeholder="Search transactions, pockets, merchants…" />
           <kbd>⌘K</kbd>
         </div>
       </div>
       <div class="nav-right">
-        <button id="themeToggle" class="icon-btn" aria-label="Toggle theme">
-          <i data-lucide="moon" class="theme-moon"></i>
-          <i data-lucide="sun" class="theme-sun"></i>
+        <button id="themeToggle" class="icon-btn" aria-label="Toggle theme" title="Toggle theme">
+          <i data-lucide="moon" class="theme-moon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-moon theme-moon"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg></i>
+          <i data-lucide="sun" class="theme-sun"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-sun theme-sun"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg></i>
         </button>
-        <button id="notifBtn" class="icon-btn notif-btn" aria-label="Notifications">
-          <i data-lucide="bell"></i>
+        <button id="notifBtn" class="icon-btn notif-btn" aria-label="Notifications" title="Notifications">
+          <i data-lucide="bell"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-bell"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg></i>
           <span id="notifBadge" class="badge hidden">0</span>
         </button>
         <div class="avatar-menu" id="avatarMenu">
@@ -89,6 +89,7 @@
               </div>
             </div>
             <div class="dropdown-divider"></div>
+            <a href="/admin/dashboard" class="dropdown-item" id="adminPortalLink" style="display:none;color:#818cf8"><i data-lucide="shield"></i> Admin Control Center</a>
             <button class="dropdown-item" data-route="profile"><i data-lucide="user"></i> My Profile</button>
             <button class="dropdown-item" data-route="settings"><i data-lucide="settings"></i> Settings</button>
             <button class="dropdown-item" id="setupPinBtn"><i data-lucide="shield-check"></i> Transaction PIN</button>
@@ -119,15 +120,15 @@
             <li><a href="#" data-route="wallet" class="nav-item"><i data-lucide="smartphone"></i><span>My Wallet</span></a></li>
           </ul>
         </div>
-        <div class="sidebar-card glass-card premium-card">
+        <div class="sidebar-card glass-card premium-card" data-route="premium" style="cursor:pointer" title="View Premium Plans">
           <div class="premium-glow"></div>
           <div class="premium-content">
             <div class="premium-icon"><i data-lucide="sparkles"></i></div>
             <h3>Premium Benefits</h3>
             <ul>
-              <li><i data-lucide="check"></i> Unlimited pockets</li>
-              <li><i data-lucide="check"></i> Advanced insights</li>
-              <li><i data-lucide="check"></i> Priority support</li>
+              <li><i data-lucide="check"></i> Unlimited pockets & goals</li>
+              <li><i data-lucide="check"></i> Pro financial insights</li>
+              <li><i data-lucide="check"></i> Priority demo support</li>
             </ul>
           </div>
         </div>
@@ -173,7 +174,7 @@
   </div>
 </div>
 
-<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+<script src="/static/js/lucide.min.js"></script>
 <script src="/static/js/app.js"></script>
 <script src="/static/js/api.js"></script>
 <script src="/static/js/ui.js"></script>
@@ -182,6 +183,7 @@
 <script src="/static/js/views/transactions.js"></script>
 <script src="/static/js/views/analytics.js"></script>
 <script src="/static/js/views/wallet.js"></script>
+<script src="/static/js/views/premium.js"></script>
 <script src="/static/js/views/modals.js"></script>
 <script src="/static/js/assistant.js"></script>
 <script src="/static/js/init.js"></script>

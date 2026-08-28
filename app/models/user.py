@@ -31,6 +31,7 @@ class User(UserMixin, db.Model):
     phone_verified = db.Column(db.Boolean, default=False)
     is_active = db.Column(db.Boolean, default=True)
     is_premium = db.Column(db.Boolean, default=False)
+    is_admin = db.Column(db.Boolean, default=False)
     
     theme_preference = db.Column(db.String(10), default='dark')
     currency_preference = db.Column(db.String(10), default='INR')
@@ -72,11 +73,15 @@ class User(UserMixin, db.Model):
     def password(self, password):
         self.password_hash = generate_password_hash(password)
     
+    def set_password(self, password):
+        self.password = password
+
     def verify_password(self, password):
         return check_password_hash(self.password_hash, password)
     
     def set_transaction_pin(self, pin):
         self.transaction_pin_hash = generate_password_hash(pin)
+
     
     def verify_transaction_pin(self, pin):
         if self.pin_locked_until and self.pin_locked_until > datetime.utcnow():
@@ -305,6 +310,7 @@ class User(UserMixin, db.Model):
             'email_verified': self.email_verified,
             'phone_verified': self.phone_verified,
             'is_premium': self.is_premium,
+            'is_admin': bool(self.is_admin),
             'has_transaction_pin': self.transaction_pin_hash is not None,
             'totp_enabled': bool(self.totp_enabled),
             'has_backup_codes': len(self.totp_backup_codes or []) > 0,

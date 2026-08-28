@@ -92,7 +92,7 @@
       // 7. Notifications Button
       if (e.target.closest('#notifBtn')) {
         e.preventDefault();
-        PP.navigate?.('wallet');
+        PP.Modals?.notifications?.();
         return;
       }
 

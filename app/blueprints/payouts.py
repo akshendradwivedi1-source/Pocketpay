@@ -100,7 +100,11 @@ def execute_qr_payment():
 def transfer_to_bank():
     """Transfers funds to a bank account using legitimate payout provider in Sandbox/Live mode"""
     data = request.get_json() or {}
-    valid, msg = validate_required_fields(data, ['account_number', 'ifsc_code', 'account_holder', 'amount'])
+    account_holder = str(data.get('account_holder') or data.get('beneficiary_name') or '').strip()
+    if not account_holder:
+        return error_response('Account holder name is required', 400)
+
+    valid, msg = validate_required_fields(data, ['account_number', 'ifsc_code', 'amount'])
     if not valid:
         return error_response(msg, 400)
         
@@ -111,7 +115,7 @@ def transfer_to_bank():
     beneficiary = {
         'account_number': str(data.get('account_number', '')).strip(),
         'ifsc_code': str(data.get('ifsc_code', '')).strip().upper(),
-        'account_holder': str(data.get('account_holder', '')).strip(),
+        'account_holder': account_holder,
         'bank_name': str(data.get('bank_name', '')).strip() or "Bank Account"
     }
     

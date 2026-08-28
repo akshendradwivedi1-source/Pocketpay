@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PocketPay Admin Portal — Secure Login</title>
+  
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+  
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/admin.css') }}">
+  
+  <style>
+    .admin-login-wrapper {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+      background: radial-gradient(circle at top right, rgba(99, 102, 241, 0.12), transparent 45%),
+                  radial-gradient(circle at bottom left, rgba(168, 85, 247, 0.08), transparent 45%),
+                  var(--admin-bg, #090a10);
+    }
+    .admin-login-card {
+      width: 100%;
+      max-width: 440px;
+      background: rgba(18, 20, 32, 0.95);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 20px;
+      padding: 2.5rem 2rem;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.05);
+      backdrop-filter: blur(16px);
+    }
+    .admin-login-header {
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+    .admin-logo-box {
+      width: 64px;
+      height: 64px;
+      border-radius: 18px;
+      background: linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(168, 85, 247, 0.2));
+      border: 1px solid rgba(99, 102, 241, 0.4);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 1.25rem;
+      color: #818cf8;
+      box-shadow: 0 0 20px rgba(99, 102, 241, 0.25);
+    }
+    .admin-login-title {
+      font-size: 1.65rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      color: #ffffff;
+      margin: 0 0 0.35rem;
+    }
+    .admin-login-sub {
+      color: #94a3b8;
+      font-size: 0.88rem;
+    }
+    .admin-form-group {
+      margin-bottom: 1.25rem;
+    }
+    .admin-form-label {
+      display: block;
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: #cbd5e1;
+      margin-bottom: 0.45rem;
+      letter-spacing: 0.02em;
+    }
+    .admin-input-wrap {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+    .admin-input-icon {
+      position: absolute;
+      left: 1rem;
+      color: #64748b;
+      width: 18px;
+      height: 18px;
+      pointer-events: none;
+    }
+    .admin-form-input {
+      width: 100%;
+      background: rgba(10, 11, 18, 0.8);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 12px;
+      padding: 0.85rem 1rem 0.85rem 2.75rem;
+      color: #ffffff;
+      font-size: 0.95rem;
+      font-family: inherit;
+      transition: all 0.2s ease;
+      outline: none;
+    }
+    .admin-form-input:focus {
+      border-color: #6366f1;
+      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+      background: rgba(15, 17, 28, 0.95);
+    }
+    .admin-toggle-pwd {
+      position: absolute;
+      right: 0.85rem;
+      background: none;
+      border: none;
+      color: #64748b;
+      cursor: pointer;
+      padding: 0.3rem;
+      display: flex;
+      align-items: center;
+    }
+    .admin-toggle-pwd:hover {
+      color: #cbd5e1;
+    }
+    .admin-error-box {
+      background: rgba(239, 68, 68, 0.12);
+      border: 1px solid rgba(239, 68, 68, 0.35);
+      border-radius: 12px;
+      padding: 0.85rem 1rem;
+      color: #fca5a5;
+      font-size: 0.85rem;
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+      margin-bottom: 1.25rem;
+    }
+    .admin-submit-btn {
+      width: 100%;
+      background: linear-gradient(135deg, #6366f1, #4f46e5);
+      color: #ffffff;
+      border: none;
+      border-radius: 12px;
+      padding: 0.95rem;
+      font-size: 0.95rem;
+      font-weight: 700;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      transition: all 0.2s ease;
+      box-shadow: 0 4px 14px rgba(99, 102, 241, 0.35);
+      margin-top: 0.5rem;
+    }
+    .admin-submit-btn:hover {
+      background: linear-gradient(135deg, #4f46e5, #4338ca);
+      transform: translateY(-1px);
+      box-shadow: 0 6px 20px rgba(99, 102, 241, 0.45);
+    }
+    .admin-login-footer {
+      text-align: center;
+      margin-top: 1.75rem;
+      padding-top: 1.25rem;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      font-size: 0.82rem;
+      color: #64748b;
+    }
+    .admin-login-footer a {
+      color: #818cf8;
+      text-decoration: none;
+      font-weight: 600;
+    }
+    .admin-login-footer a:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body class="admin-body">
+  <div class="admin-login-wrapper">
+    <div class="admin-login-card">
+      <div class="admin-login-header">
+        <div class="admin-logo-box">
+          <i data-lucide="shield-check" style="width:32px;height:32px"></i>
+        </div>
+        <h1 class="admin-login-title">PocketPay Admin</h1>
+        <p class="admin-login-sub">Secure server administration portal</p>
+      </div>
+
+      {% if error %}
+      <div class="admin-error-box">
+        <i data-lucide="alert-circle" style="width:18px;height:18px;flex-shrink:0"></i>
+        <span>{{ error }}</span>
+      </div>
+      {% endif %}
+
+      <form method="POST" action="{{ url_for('admin.admin_login', next=request.args.get('next', '')) }}">
+        <div class="admin-form-group">
+          <label class="admin-form-label" for="email">Admin Email / Username</label>
+          <div class="admin-input-wrap">
+            <i data-lucide="user" class="admin-input-icon"></i>
+            <input 
+              type="text" 
+              id="email" 
+              name="email" 
+              class="admin-form-input" 
+              placeholder="admin@pocketpay.app" 
+              value="{{ email or '' }}" 
+              required 
+              autofocus
+            >
+          </div>
+        </div>
+
+        <div class="admin-form-group">
+          <label class="admin-form-label" for="password">Password</label>
+          <div class="admin-input-wrap">
+            <i data-lucide="lock" class="admin-input-icon"></i>
+            <input 
+              type="password" 
+              id="password" 
+              name="password" 
+              class="admin-form-input" 
+              placeholder="••••••••••••" 
+              required
+            >
+            <button type="button" class="admin-toggle-pwd" onclick="togglePasswordVisibility()" title="Toggle visibility">
+              <i data-lucide="eye" id="eyeIcon" style="width:18px;height:18px"></i>
+            </button>
+          </div>
+        </div>
+
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.5rem">
+          <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.84rem;color:#94a3b8;cursor:pointer">
+            <input type="checkbox" name="remember" value="true" style="accent-color:#6366f1;cursor:pointer">
+            <span>Keep session active</span>
+          </label>
+        </div>
+
+        <button type="submit" class="admin-submit-btn">
+          <i data-lucide="log-in" style="width:18px;height:18px"></i>
+          <span>Authenticate to Control Center</span>
+        </button>
+      </form>
+
+      <div class="admin-login-footer">
+        <span>PocketPay Security Gateway &bull; </span>
+        <a href="{{ url_for('main.index') }}">Return to Public App</a>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    lucide.createIcons();
+
+    function togglePasswordVisibility() {
+      const pwdInput = document.getElementById('password');
+      const eyeIcon = document.getElementById('eyeIcon');
+      if (pwdInput.type === 'password') {
+        pwdInput.type = 'text';
+        eyeIcon.setAttribute('data-lucide', 'eye-off');
+      } else {
+        pwdInput.type = 'password';
+        eyeIcon.setAttribute('data-lucide', 'eye');
+      }
+      lucide.createIcons();
+    }
+  </script>
+</body>
+</html>

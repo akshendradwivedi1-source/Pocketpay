@@ -151,6 +151,20 @@ def get_color_options():
     return json_response({'colors': colors, 'count': len(colors)})
 
 
+@bp.route('/qr', methods=['GET'])
+def get_qr_image():
+    import base64
+    from flask import Response
+    content = request.args.get('content') or request.args.get('data') or 'pocketpay://wallet'
+    size = request.args.get('size', 300, type=int)
+    data_uri = generate_qr_code(content, size)
+    if not data_uri or ',' not in data_uri:
+        return error_response('Failed to generate QR code', 500)
+    raw_b64 = data_uri.split(',', 1)[1]
+    raw_png = base64.b64decode(raw_b64)
+    return Response(raw_png, mimetype='image/png')
+
+
 @bp.route('/qr/generate', methods=['POST'])
 @api_login_required
 def generate_custom_qr():
@@ -246,26 +260,13 @@ def dashboard_summary():
 
 @bp.route('/assistant/ask', methods=['POST'])
 def assistant_ask():
+    from app.services.assistant_service import AssistantService
     data = request.get_json() or {}
-    query = str(data.get('query', '')).strip().lower()
-    route = str(data.get('route', 'dashboard')).strip().lower()
+    query = str(data.get('query', '')).strip()
+    route = str(data.get('route', 'dashboard')).strip()
+    history = data.get('history', [])
     
-    financial_keywords = ['transfer money for me', 'send money to', 'execute payment', 'change my balance', 'give me money', 'set balance to', 'my password is', 'what is my password', 'what is my otp', 'show otp']
-    if any(k in query for k in financial_keywords):
-        return json_response({
-            'type': 'guardrail_notice',
-            'title': 'Security Protected',
-            'response': 'For your security, PocketPay Assistant cannot perform financial transactions, modify balances, or access private passwords/OTPs.',
-            'suggested_actions': [
-                {'label': 'Open Transfer', 'action': 'transfer'},
-                {'label': 'Make Payment', 'action': 'expense'}
-            ]
-        })
-        
-    return json_response({
-        'type': 'guidance',
-        'route': route,
-        'query': query,
-        'message': f'PocketPay AI Assistant is active and ready to guide you on {route}.'
-    })
+    user = current_user if current_user.is_authenticated else None
+    result = AssistantService.process_query(user, query, route=route, chat_history=history)
+    return json_response(result)
 

@@ -10,6 +10,8 @@ TRANSACTION_TYPES = (
     ('topup', 'Top-up'),
     ('withdraw', 'Withdraw'),
     ('refund', 'Refund'),
+    ('peer_send', 'Sent Money'),
+    ('peer_receive', 'Received Money'),
 )
 
 TRANSACTION_STATUS = (

@@ -7,13 +7,15 @@ PP.Dashboard = {
     </div>`;
     PP.refreshIcons();
     let data, analytics, txs, insights, budgets;
-    try { [data, analytics, txs, insights, budgets] = await Promise.all([
-      PP.MiscAPI.dashboard(),
-      PP.AnalyticsAPI.overview(),
-      PP.TxAPI.list({ per_page: 8 }),
-      PP.AnalyticsAPI.insights().catch(() => null),
-      PP.WalletAPI.rules().catch(() => null),
-    ]); } catch (e) { return PP.UI.toast('Error loading dashboard', e.message, 'error'); }
+    try {
+      [data, analytics, txs, insights, budgets] = await Promise.all([
+        PP.MiscAPI.dashboard(),
+        PP.AnalyticsAPI.overview(),
+        PP.TxAPI.list({ per_page: 8 }),
+        PP.AnalyticsAPI.insights().catch(() => null),
+        PP.WalletAPI.rules().catch(() => null),
+      ]);
+    } catch (e) { return PP.UI.toast('Error loading dashboard', e.message, 'error'); }
 
     const u = data?.data?.user || PP.state.user || {};
     const b = data?.data?.balances || {};
@@ -295,6 +297,92 @@ PP.Dashboard = {
 
     main2Col.append(pocketsWrap, recentWrap);
     wrap.appendChild(main2Col);
+
+    // ---------- Savings Goals Section (Phase 11) ----------
+    const goalsWrap = PP.el('div', { class: 'section-card' });
+    goalsWrap.innerHTML = `
+      <div class="section-title">
+        <h3 style="display:flex;align-items:center;gap:0.5rem">
+          <i data-lucide="target" style="color:var(--accent)"></i>
+          <span>Savings Goals</span>
+        </h3>
+        <button class="btn btn-sm btn-ghost" id="createGoalDashBtn">
+          <i data-lucide="plus"></i> New Goal
+        </button>
+      </div>
+      <div id="dashGoalsContainer" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(280px, 1fr));gap:1rem;margin-top:0.75rem">
+        <div class="empty-state" style="padding:1.5rem">
+          <p style="color:var(--text-muted);font-size:0.85rem">Loading your savings targets...</p>
+        </div>
+      </div>
+    `;
+    wrap.appendChild(goalsWrap);
+
+    setTimeout(async () => {
+      const createBtn = goalsWrap.querySelector('#createGoalDashBtn');
+      if (createBtn) createBtn.onclick = () => PP.Modals.createGoal();
+
+      const containerEl = goalsWrap.querySelector('#dashGoalsContainer');
+      if (!containerEl) return;
+
+      try {
+        const goalsRes = await PP.GoalsAPI.list();
+        const goals = goalsRes.data?.items || [];
+        if (!goals.length) {
+          containerEl.innerHTML = `
+            <div class="empty-state" style="grid-column:1/-1;padding:1.5rem;text-align:center">
+              <p style="color:var(--text-muted);font-size:0.88rem;margin-bottom:0.75rem">No active savings goals. Set a target to save for a laptop, trip, or emergency fund.</p>
+              <button class="btn btn-primary btn-sm" id="emptyCreateGoalBtn"><i data-lucide="plus"></i> Set First Savings Goal</button>
+            </div>
+          `;
+          containerEl.querySelector('#emptyCreateGoalBtn')?.addEventListener('click', () => PP.Modals.createGoal());
+          PP.refreshIcons();
+          return;
+        }
+
+        containerEl.innerHTML = '';
+        goals.forEach(g => {
+          const pct = g.progress_percentage || 0;
+          const card = PP.el('div', {
+            class: 'glass-card',
+            style: 'border:1px solid var(--border);border-radius:16px;padding:1.25rem;display:flex;flex-direction:column;gap:0.75rem;background:var(--surface)'
+          });
+          card.innerHTML = `
+            <div style="display:flex;align-items:center;justify-content:space-between">
+              <div style="display:flex;align-items:center;gap:0.6rem">
+                <div style="width:36px;height:36px;border-radius:10px;background:rgba(99,102,241,0.15);color:var(--accent);display:flex;align-items:center;justify-content:center">
+                  <i data-lucide="target"></i>
+                </div>
+                <div>
+                  <h4 style="margin:0;font-size:0.95rem;font-weight:700">${g.name}</h4>
+                  <span style="font-size:0.75rem;color:var(--text-dim)">${g.category} ${g.days_remaining >= 0 ? `• ${g.days_remaining}d left` : ''}</span>
+                </div>
+              </div>
+              <span class="chip ${g.is_completed ? 'success' : ''}" style="font-size:0.72rem">${pct}%</span>
+            </div>
+            <div>
+              <div style="display:flex;justify-content:space-between;font-size:0.82rem;margin-bottom:0.35rem">
+                <span style="color:var(--text-muted)">Saved: <b style="color:var(--text)">₹${g.current_amount.toLocaleString('en-IN')}</b></span>
+                <span style="color:var(--text-dim)">Target: ₹${g.target_amount.toLocaleString('en-IN')}</span>
+              </div>
+              <div style="height:8px;border-radius:4px;background:rgba(255,255,255,0.08);overflow:hidden">
+                <div style="height:100%;width:${pct}%;background:linear-gradient(90deg, #6366f1, #10b981);border-radius:4px;transition:width 0.4s ease"></div>
+              </div>
+            </div>
+            <div style="display:flex;gap:0.5rem;margin-top:0.25rem">
+              <button class="btn btn-sm btn-outline deposit-goal-btn" style="flex:1"><i data-lucide="plus-circle"></i> Add Money</button>
+              <button class="btn btn-sm btn-ghost edit-goal-btn" title="Edit"><i data-lucide="pencil"></i></button>
+            </div>
+          `;
+          card.querySelector('.deposit-goal-btn')?.addEventListener('click', () => PP.Modals.depositGoal(g));
+          card.querySelector('.edit-goal-btn')?.addEventListener('click', () => PP.Modals.createGoal(g));
+          containerEl.appendChild(card);
+        });
+        PP.refreshIcons();
+      } catch (err) {
+        console.warn('Goals load error:', err);
+      }
+    }, 0);
 
     // ---------- Analytics row: by category + daily ----------
     const catP = PP.AnalyticsAPI.spendingByCategory(1);

@@ -227,6 +227,19 @@ img { max-width: 100%; display:block; }
 .btn-icon-sm { width: 34px; height: 34px; border-radius: var(--radius-sm); }
 .btn:disabled { opacity: .5; cursor: not-allowed; transform: none !important; }
 
+svg.lucide, i[data-lucide], .lucide {
+  width: 1.15em;
+  height: 1.15em;
+  display: inline-block;
+  vertical-align: middle;
+  flex-shrink: 0;
+  stroke: currentColor;
+  stroke-width: 2px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
+}
+
 .icon-btn {
   width: 40px; height: 40px;
   display: inline-flex;
@@ -240,7 +253,7 @@ img { max-width: 100%; display:block; }
   position: relative;
 }
 .icon-btn:hover { background: var(--hover-bg); border-color: var(--border-strong); transform: translateY(-1px); }
-.icon-btn i { width: 18px; height: 18px; }
+.icon-btn i, .icon-btn svg { width: 19px; height: 19px; stroke: currentColor; stroke-width: 2px; display: inline-flex; align-items: center; justify-content: center; }
 
 .badge {
   display: inline-flex;
@@ -297,6 +310,15 @@ img { max-width: 100%; display:block; }
   font-size: .95rem;
   transition: all .2s ease;
   outline: none;
+}
+.form-select option, select option {
+  background: #1e293b;
+  color: #f8fafc;
+  padding: 0.6rem 0.8rem;
+}
+[data-theme="light"] .form-select option, [data-theme="light"] select option {
+  background: #ffffff;
+  color: #0f172a;
 }
 .form-input::placeholder, .form-textarea::placeholder { color: var(--text-dim); }
 .form-input:focus, .form-select:focus, .form-textarea:focus {
@@ -414,8 +436,57 @@ img { max-width: 100%; display:block; }
   border-radius: var(--radius-sm);
   color: var(--text-muted);
 }
-.notif-btn { position: relative; }
-.theme-sun, .theme-moon { width: 18px; height: 18px; }
+.notif-btn {
+  position: relative;
+  width: 42px;
+  height: 42px;
+  border-radius: var(--radius-md);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  cursor: pointer;
+  transition: all .25s cubic-bezier(.34,1.56,.64,1);
+}
+.notif-btn:hover {
+  background: var(--hover-bg);
+  border-color: rgba(99, 102, 241, 0.45);
+  box-shadow: 0 0 16px rgba(99, 102, 241, 0.22);
+  transform: translateY(-1px);
+}
+.notif-btn i, .notif-btn svg {
+  width: 20px;
+  height: 20px;
+  stroke-width: 2px;
+  stroke: currentColor;
+  transition: transform .3s cubic-bezier(.34,1.56,.64,1), color .2s ease;
+  display: block;
+}
+.notif-btn:hover i, .notif-btn:hover svg {
+  transform: rotate(14deg) scale(1.1);
+  color: var(--accent);
+}
+.notif-btn .badge {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  min-width: 19px;
+  height: 19px;
+  padding: 0 5px;
+  border-radius: var(--radius-full);
+  font-size: .68rem;
+  font-weight: 800;
+  background: linear-gradient(135deg, #ef4444, #f43f5e);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 10px rgba(239, 68, 68, 0.55), 0 0 0 2px var(--bg);
+  pointer-events: none;
+}
+.theme-sun, .theme-moon { width: 19px; height: 19px; stroke: currentColor; stroke-width: 2px; }
 [data-theme="dark"] .theme-sun { display:none; }
 [data-theme="light"] .theme-moon { display:none; }
 
@@ -1202,13 +1273,30 @@ img { max-width: 100%; display:block; }
   width: 36px; height: 36px;
   border-radius: var(--radius-full);
   display:flex; align-items:center; justify-content:center;
-  background: var(--surface);
+  background: var(--surface-2, rgba(255, 255, 255, 0.05));
+  border: 1px solid var(--border);
   color: var(--text-muted);
-  transition: all .2s ease;
+  cursor: pointer;
+  transition: all .22s cubic-bezier(.4, 0, .2, 1);
   flex-shrink: 0;
+  outline: none;
 }
-.modal-close:hover { background: var(--hover-bg); color: var(--text); }
-.modal-close i { width: 18px; height: 18px; }
+.modal-close:hover {
+  background: rgba(239, 68, 68, 0.14);
+  border-color: rgba(239, 68, 68, 0.35);
+  color: #ef4444;
+  transform: rotate(90deg) scale(1.08);
+  box-shadow: 0 0 14px rgba(239, 68, 68, 0.25);
+}
+.modal-close:active {
+  transform: rotate(90deg) scale(0.94);
+}
+.modal-close i, .modal-close svg {
+  width: 18px; height: 18px;
+  stroke-width: 2.3px;
+  stroke: currentColor;
+  display: block;
+}
 .modal-body {
   padding: 1.5rem;
   overflow-y: auto;

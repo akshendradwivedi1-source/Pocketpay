@@ -564,3 +564,19 @@ body.admin-body {
     padding: 1rem;
   }
 }
+
+select, .admin-select, .form-select {
+  background: #181926;
+  border: 1px solid var(--admin-border);
+  color: #ffffff;
+  border-radius: 8px;
+  padding: 0.5rem 0.8rem;
+  outline: none;
+}
+
+select option, .admin-select option, .form-select option {
+  background: #181926;
+  color: #ffffff;
+  padding: 0.5rem;
+}
+

@@ -1,7 +1,7 @@
 {% extends "admin/admin_base.html" %}
 
 {% block title %}User Directory — PocketPay Admin{% endblock %}
-{% block header_title %}User Management{% endblock %}
+{% block header_title %}User Management (Live Database){% endblock %}
 
 {% block content %}
 <div class="admin-card">
@@ -18,10 +18,12 @@
       </div>
 
       <!-- Filter Buttons -->
-      <div style="display:flex;gap:0.4rem">
+      <div style="display:flex;gap:0.4rem;flex-wrap:wrap">
         <button class="admin-btn admin-btn-sm admin-btn-primary" id="btnFilterAll" onclick="filterUsers('all')">All</button>
         <button class="admin-btn admin-btn-sm admin-btn-ghost" id="btnFilterVerified" onclick="filterUsers('verified')">Verified</button>
         <button class="admin-btn admin-btn-sm admin-btn-ghost" id="btnFilterPending" onclick="filterUsers('pending')">Pending</button>
+        <button class="admin-btn admin-btn-sm admin-btn-ghost" id="btnFilterPremium" onclick="filterUsers('premium')">Premium</button>
+        <button class="admin-btn admin-btn-sm admin-btn-ghost" id="btnFilterFree" onclick="filterUsers('free')">Free</button>
         <button class="admin-btn admin-btn-sm admin-btn-ghost" id="btnFilterSuspended" onclick="filterUsers('suspended')">Suspended</button>
       </div>
     </div>
@@ -33,6 +35,7 @@
         <tr>
           <th>User</th>
           <th>Contact</th>
+          <th>Plan</th>
           <th>Balance</th>
           <th>Pockets</th>
           <th>Status</th>
@@ -42,7 +45,7 @@
       </thead>
       <tbody id="usersTableBody">
         <tr>
-          <td colspan="7" style="text-align:center;padding:2rem">
+          <td colspan="8" style="text-align:center;padding:2rem">
             <i data-lucide="loader-2" style="animation:spin 1s linear infinite;width:24px;height:24px;color:var(--admin-primary)"></i>
             <div style="margin-top:8px;color:var(--admin-text-muted)">Loading live users from database…</div>
           </td>
@@ -61,16 +64,16 @@
 </div>
 
 <!-- User Detail Modal -->
-<div class="admin-modal-overlay" id="userDetailModal">
-  <div class="admin-modal">
-    <div class="admin-modal-header">
-      <div style="font-weight:800;font-size:1.1rem;color:#ffffff" id="modalUserName">User Profile</div>
+<div class="admin-modal-overlay" id="userDetailModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.75);z-index:9999;align-items:center;justify-content:center">
+  <div class="admin-modal" style="background:#111422;border:1px solid rgba(255,255,255,0.1);border-radius:16px;max-width:650px;width:90%;max-height:85vh;overflow-y:auto;padding:1.5rem">
+    <div class="admin-modal-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+      <div style="font-weight:800;font-size:1.15rem;color:#ffffff" id="modalUserName">User Profile</div>
       <button class="admin-btn admin-btn-sm admin-btn-ghost" onclick="closeUserModal()">✕</button>
     </div>
-    <div class="admin-modal-body" id="modalUserBody">
+    <div class="admin-modal-body" id="modalUserBody" style="display:flex;flex-direction:column;gap:1rem">
       <!-- Injected by JS -->
     </div>
-    <div class="admin-modal-footer">
+    <div class="admin-modal-footer" style="margin-top:1.5rem;display:flex;justify-content:flex-end">
       <button class="admin-btn admin-btn-ghost" onclick="closeUserModal()">Close</button>
     </div>
   </div>
@@ -103,7 +106,7 @@
       if (users.length === 0) {
         tbody.innerHTML = `
           <tr>
-            <td colspan="7">
+            <td colspan="8">
               <div class="admin-empty-state">
                 <i data-lucide="users"></i>
                 <div>No users match your filter criteria.</div>
@@ -115,59 +118,77 @@
         return;
       }
 
-      tbody.innerHTML = users.map(u => `
-        <tr>
-          <td>
-            <div style="font-weight:700">${u.full_name}</div>
-            <div style="font-size:0.75rem;color:var(--admin-text-dim)">ID: ${u.uuid.substring(0, 8)}</div>
-          </td>
-          <td>
-            <div>${u.email}</div>
-            <div style="font-size:0.75rem;color:var(--admin-text-muted)">${u.phone || 'No phone'}</div>
-          </td>
-          <td>
-            <b style="color:var(--admin-primary)">₹${u.wallet_balance.toLocaleString('en-IN', {minimumFractionDigits: 2})}</b>
-          </td>
-          <td>
-            <span class="admin-chip info">${u.pockets_count} Pockets</span>
-          </td>
-          <td>
-            ${u.is_active ? 
-              (u.email_verified ? '<span class="admin-chip success">Verified</span>' : 
-               (u.otp_approval_status === 'pending_admin_approval' ? '<span class="admin-chip warning">Pending Approval</span>' : '<span class="admin-chip info">Registered</span>')) :
-              '<span class="admin-chip danger">Suspended</span>'
-            }
-          </td>
-          <td style="font-size:0.8rem;color:var(--admin-text-muted)">${u.created_at || '—'}</td>
-          <td style="text-align:right">
-            <div style="display:flex;gap:0.4rem;justify-content:flex-end">
-              <button class="admin-btn admin-btn-sm admin-btn-ghost" onclick="viewUserDetail(${u.id})">
-                <i data-lucide="eye"></i> Details
-              </button>
-              <button class="admin-btn admin-btn-sm ${u.is_active ? 'admin-btn-danger' : 'admin-btn-success'}" onclick="toggleUserStatus(${u.id}, '${u.full_name}', ${u.is_active})">
-                ${u.is_active ? 'Suspend' : 'Activate'}
-              </button>
-            </div>
-          </td>
-        </tr>
-      `).join('');
+      tbody.innerHTML = users.map(u => {
+        const isRootAdmin = (u.email === 'akshendra.dwivedi1@gmail.com' || u.email === 'admin@pocketpay.app');
+        return `
+          <tr>
+            <td>
+              <div style="font-weight:700">${u.full_name}</div>
+              <div style="font-size:0.75rem;color:var(--admin-text-dim)">ID: ${u.uuid ? u.uuid.substring(0, 8) : u.id}</div>
+            </td>
+            <td>
+              <div>${u.email}</div>
+              <div style="font-size:0.75rem;color:var(--admin-text-muted)">${u.phone || 'No phone'}</div>
+            </td>
+            <td>
+              ${u.is_premium ? 
+                '<span class="admin-chip" style="background:rgba(168,85,247,0.15);color:#c084fc;border:1px solid rgba(168,85,247,0.3)">Premium</span>' : 
+                '<span class="admin-chip info">Free</span>'
+              }
+            </td>
+            <td>
+              <b style="color:var(--admin-primary)">₹${u.wallet_balance.toLocaleString('en-IN', {minimumFractionDigits: 2})}</b>
+            </td>
+            <td>
+              <span class="admin-chip info">${u.pockets_count} Pockets</span>
+            </td>
+            <td>
+              ${u.is_active ? 
+                (u.email_verified ? '<span class="admin-chip success">Verified</span>' : 
+                 (u.otp_approval_status === 'pending_admin_approval' ? '<span class="admin-chip warning">Pending</span>' : '<span class="admin-chip info">Registered</span>')) :
+                '<span class="admin-chip danger">Suspended</span>'
+              }
+            </td>
+            <td style="font-size:0.8rem;color:var(--admin-text-muted)">${u.created_at || '—'}</td>
+            <td style="text-align:right">
+              <div style="display:flex;gap:0.35rem;justify-content:flex-end;flex-wrap:wrap">
+                <button class="admin-btn admin-btn-sm admin-btn-ghost" onclick="viewUserDetail(${u.id})" title="View Details">
+                  <i data-lucide="eye"></i>
+                </button>
+                <button class="admin-btn admin-btn-sm admin-btn-ghost" onclick="toggleUserPremium(${u.id}, '${u.full_name}')" title="Toggle Premium Plan">
+                  <i data-lucide="sparkles" style="color:#c084fc"></i>
+                </button>
+                ${!isRootAdmin ? `
+                  <button class="admin-btn admin-btn-sm ${u.is_active ? 'admin-btn-ghost' : 'admin-btn-success'}" onclick="toggleUserStatus(${u.id}, '${u.full_name}', ${u.is_active})" title="${u.is_active ? 'Suspend Account' : 'Activate Account'}">
+                    <i data-lucide="${u.is_active ? 'shield-off' : 'shield-check'}"></i>
+                  </button>
+                  <button class="admin-btn admin-btn-sm admin-btn-danger" onclick="deleteUser(${u.id}, '${u.full_name}', '${u.email}')" title="Delete User">
+                    <i data-lucide="trash-2"></i>
+                  </button>
+                ` : `
+                  <span class="admin-chip" style="font-size:0.7rem;opacity:0.7">Admin</span>
+                `}
+              </div>
+            </td>
+          </tr>
+        `;
+      }).join('');
 
       lucide.createIcons();
     } catch (e) {
-      tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--admin-danger);padding:2rem">${e.message}</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--admin-danger);padding:2rem">${e.message}</td></tr>`;
     }
   }
 
   function filterUsers(status) {
     currentFilter = status;
     currentPage = 1;
-    ['btnFilterAll', 'btnFilterVerified', 'btnFilterPending', 'btnFilterSuspended'].forEach(id => {
-      document.getElementById(id).className = 'admin-btn admin-btn-sm admin-btn-ghost';
+    ['btnFilterAll', 'btnFilterVerified', 'btnFilterPending', 'btnFilterPremium', 'btnFilterFree', 'btnFilterSuspended'].forEach(id => {
+      const btn = document.getElementById(id);
+      if (btn) btn.className = 'admin-btn admin-btn-sm admin-btn-ghost';
     });
-    if (status === 'all') document.getElementById('btnFilterAll').className = 'admin-btn admin-btn-sm admin-btn-primary';
-    if (status === 'verified') document.getElementById('btnFilterVerified').className = 'admin-btn admin-btn-sm admin-btn-primary';
-    if (status === 'pending') document.getElementById('btnFilterPending').className = 'admin-btn admin-btn-sm admin-btn-primary';
-    if (status === 'suspended') document.getElementById('btnFilterSuspended').className = 'admin-btn admin-btn-sm admin-btn-primary';
+    const activeBtn = document.getElementById(`btnFilter${status.charAt(0).toUpperCase() + status.slice(1)}`);
+    if (activeBtn) activeBtn.className = 'admin-btn admin-btn-sm admin-btn-primary';
     loadUsers();
   }
 
@@ -203,6 +224,37 @@
     }
   }
 
+  async function toggleUserPremium(userId, name) {
+    try {
+      const res = await fetch(`/admin/api/users/${userId}/toggle-premium`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to update premium status');
+      showAdminToast('Premium Updated', data.message, 'success');
+      loadUsers();
+    } catch (e) {
+      showAdminToast('Error', e.message, 'error');
+    }
+  }
+
+  async function deleteUser(userId, name, email) {
+    if (!confirm(`Are you sure you want to permanently delete user ${name} (${email})?\nThis action will also remove their associated data.`)) return;
+    try {
+      const res = await fetch(`/admin/api/users/${userId}/delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to delete user');
+      showAdminToast('Deleted', data.message, 'success');
+      loadUsers();
+    } catch (e) {
+      showAdminToast('Error', e.message, 'error');
+    }
+  }
+
   async function viewUserDetail(userId) {
     const modal = document.getElementById('userDetailModal');
     const body = document.getElementById('modalUserBody');
@@ -223,10 +275,10 @@
           <div><div style="font-size:0.75rem;color:var(--admin-text-muted)">EMAIL</div><b>${u.email}</b></div>
           <div><div style="font-size:0.75rem;color:var(--admin-text-muted)">PHONE</div><b>${u.phone || '—'}</b></div>
           <div><div style="font-size:0.75rem;color:var(--admin-text-muted)">WALLET BALANCE</div><b style="color:var(--admin-primary)">₹${u.wallet_balance.toFixed(2)}</b></div>
+          <div><div style="font-size:0.75rem;color:var(--admin-text-muted)">PLAN</div><b>${u.is_premium ? 'Premium ★' : 'Free'}</b></div>
           <div><div style="font-size:0.75rem;color:var(--admin-text-muted)">STATUS</div><b>${u.is_active ? 'Active' : 'Suspended'}</b></div>
           <div><div style="font-size:0.75rem;color:var(--admin-text-muted)">2FA (TOTP)</div><b>${u.totp_enabled ? 'Enabled ✓' : 'Disabled'}</b></div>
-          <div><div style="font-size:0.75rem;color:var(--admin-text-muted)">TRANSACTION PIN</div><b>${u.has_pin ? 'Configured ✓' : 'Not Set'}</b></div>
-          <div><div style="font-size:0.75rem;color:var(--admin-text-muted)">VIRTUAL WALLET</div><code>${u.virtual_wallet_id || '—'}</code></div>
+          <div><div style="font-size:0.75rem;color:var(--admin-text-muted)">TRANSACTION PIN</div><b>${u.has_pin ? 'PIN SET ✓' : 'NO PIN'}</b></div>
           <div><div style="font-size:0.75rem;color:var(--admin-text-muted)">VIRTUAL UPI</div><code>${u.virtual_upi_id || '—'}</code></div>
         </div>
 

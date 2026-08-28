@@ -1,3 +1,4 @@
+import re
 from flask import Blueprint, request
 from flask_login import current_user
 from datetime import datetime
@@ -7,6 +8,7 @@ from app.models.pocket import Pocket
 from app.models.transaction import Transaction, EXPENSE_CATEGORIES
 from app.models.distribution_rule import DistributionRule
 from app.models.notification import Notification
+from app.models.money_request import MoneyRequest
 from app.utils.helpers import (
     json_response, error_response, validate_required_fields,
     api_login_required, get_paginated_query, paginated_response, generate_qr_code
@@ -253,9 +255,11 @@ def execute_income_distribution():
         return error_response('Amount must be positive', 400)
     
     strategy = data.get('strategy')
-    description = data.get('description', '').strip() or 'Income received'
-    source = data.get('source', '').strip() or 'Other'
-    fund_source = (data.get('fund_source') or 'external').lower()
+    raw_desc = data.get('description')
+    description = str(raw_desc).strip() if raw_desc is not None and str(raw_desc).strip() else 'Income received'
+    raw_src = data.get('source')
+    source = str(raw_src).strip() if raw_src is not None and str(raw_src).strip() else 'Other'
+    fund_source = str(data.get('fund_source') or 'external').lower()
     
     if fund_source == 'wallet':
         if current_user.wallet_balance < total_amount:
@@ -417,11 +421,14 @@ def create_distribution_rule():
     if not isinstance(allocations, list) or len(allocations) < 1:
         return error_response('At least one allocation required', 400)
     
+    raw_desc = data.get('description')
+    clean_desc = str(raw_desc).strip() if raw_desc is not None and str(raw_desc).strip() else None
+    
     temp_rule = DistributionRule(
         user_id=current_user.id,
         name=name,
         rule_type=rule_type,
-        description=data.get('description', '').strip() or None,
+        description=clean_desc,
         allocations=allocations
     )
     
@@ -436,7 +443,7 @@ def create_distribution_rule():
         user_id=current_user.id,
         name=name,
         rule_type=rule_type,
-        description=data.get('description', '').strip() or None,
+        description=clean_desc,
         allocations=allocations,
         is_default=bool(data.get('is_default', False)),
         is_active=True
@@ -550,7 +557,7 @@ def wallet_withdraw():
         type='withdraw',
         amount=amount,
         category='Wallet Withdrawal',
-        description=data.get('description', '').strip() or 'Withdrawal to bank',
+        description=str(data.get('description') or '').strip() or 'Withdrawal to bank',
         payment_method=data.get('payment_method', 'bank')
     )
     db.session.add(tx)
@@ -571,3 +578,447 @@ def get_expense_categories():
         'categories': EXPENSE_CATEGORIES,
         'count': len(EXPENSE_CATEGORIES)
     })
+
+
+# =============================================================================
+# PEER-TO-PEER (P2P) SEND & REQUEST MONEY ENDPOINTS
+# =============================================================================
+
+@bp.route('/search-user', methods=['GET'])
+@api_login_required
+def search_user():
+    """
+    Safely searches for a PocketPay user by email, phone, UPI ID, or virtual wallet ID.
+    Returns sanitized public user profile without leaking sensitive credentials.
+    """
+    query = request.args.get('q', '').strip()
+    if not query:
+        return error_response('Search query is required', 400)
+        
+    clean_q = query.lower()
+    clean_phone = re.sub(r'[\s\-]', '', query)
+    
+    target = User.query.filter(
+        (User.email == clean_q) |
+        (User.virtual_upi_id == clean_q) |
+        (User.virtual_wallet_id == query.upper()) |
+        (User.phone == query) |
+        (User.phone == clean_phone)
+    ).first()
+    
+    if not target:
+        return error_response('User not found on PocketPay', 404)
+        
+    if target.id == current_user.id:
+        return error_response('You cannot send or request money from yourself', 400)
+        
+    # Mask email for privacy (e.g. j***@domain.com)
+    email_parts = target.email.split('@')
+    masked_email = email_parts[0][0] + '***@' + email_parts[1] if len(email_parts) == 2 else target.email
+    
+    return json_response({
+        'found': True,
+        'user': {
+            'id': target.id,
+            'full_name': target.full_name,
+            'masked_email': masked_email,
+            'virtual_upi_id': target.virtual_upi_id,
+            'virtual_wallet_id': target.virtual_wallet_id,
+            'avatar_url': target.avatar_url
+        }
+    })
+
+
+@bp.route('/send-money', methods=['POST'])
+@api_login_required
+def send_money():
+    """
+    Transfers money directly between PocketPay users.
+    Verifies Transaction PIN and 2FA TOTP before executing transfer.
+    Atomically debits sender and credits recipient with dual ledger records.
+    """
+    data = request.get_json() or {}
+    valid, msg = validate_required_fields(data, ['recipient', 'amount', 'pin'])
+    if not valid:
+        return error_response(msg, 400)
+        
+    amount = float(data.get('amount', 0))
+    if amount <= 0:
+        return error_response('Transfer amount must be positive', 400)
+    if amount < 1.0:
+        return error_response('Minimum peer transfer amount is ₹1.00', 400)
+        
+    pin = str(data.get('pin', '')).strip()
+    if not current_user.transaction_pin_hash:
+        return error_response('Transaction PIN not set. Please set up your PIN first.', 400, code='PIN_NOT_SET')
+        
+    pin_ok, pin_err = current_user.verify_transaction_pin(pin)
+    if not pin_ok:
+        return error_response(pin_err or 'Incorrect PIN', 401, code='INCORRECT_PIN',
+                              pin_attempts=current_user.pin_attempts,
+                              pin_locked_until=current_user.pin_locked_until.isoformat() if current_user.pin_locked_until else None)
+                              
+    # 2FA TOTP verification
+    if current_user.totp_enabled:
+        totp_code = data.get('totp_code') or data.get('totp') or data.get('otp')
+        verified, err, err_code = current_user.verify_totp(totp_code)
+        if not verified:
+            return error_response(err or 'Invalid Authenticator 2FA code', 401, code=err_code or 'INCORRECT_TOTP')
+            
+    # Resolve recipient
+    recipient_identifier = str(data.get('recipient', '')).strip()
+    clean_q = recipient_identifier.lower()
+    clean_phone = re.sub(r'[\s\-]', '', recipient_identifier)
+    
+    recipient = User.query.filter(
+        (User.id == (int(recipient_identifier) if recipient_identifier.isdigit() and len(recipient_identifier) < 8 else -1)) |
+        (User.email == clean_q) |
+        (User.virtual_upi_id == clean_q) |
+        (User.virtual_wallet_id == recipient_identifier.upper()) |
+        (User.phone == recipient_identifier) |
+        (User.phone == clean_phone)
+    ).first()
+    
+    if not recipient:
+        return error_response('Recipient account not found on PocketPay', 404)
+        
+    if recipient.id == current_user.id:
+        return error_response('Cannot send money to your own account', 400)
+        
+    pocket_id = data.get('pocket_id')
+    note = str(data.get('note', '')).strip() or f'Transfer to {recipient.full_name}'
+    
+    # Source funds deduction
+    source_pocket = None
+    if pocket_id:
+        source_pocket = Pocket.query.filter_by(id=pocket_id, user_id=current_user.id, archived=False).first()
+        if not source_pocket:
+            return error_response('Selected funding pocket not found', 404)
+        if source_pocket.current_balance < amount:
+            return error_response(f'Insufficient balance in {source_pocket.name} (Balance: ₹{source_pocket.current_balance:,.2f})', 400,
+                                  code='INSUFFICIENT_POCKET_BALANCE')
+        source_pocket.deduct_money(amount)
+    else:
+        if (current_user.wallet_balance or 0.0) < amount:
+            return error_response(f'Insufficient available wallet balance (Available: ₹{current_user.wallet_balance:,.2f})', 400,
+                                  code='INSUFFICIENT_BALANCE')
+        current_user.wallet_balance = round(current_user.wallet_balance - amount, 2)
+        
+    # Credit recipient wallet
+    recipient.wallet_balance = round((recipient.wallet_balance or 0.0) + amount, 2)
+    
+    # Outgoing transaction for sender
+    tx_sender = Transaction(
+        transaction_id=Transaction.generate_transaction_id(),
+        user_id=current_user.id,
+        type='peer_send',
+        amount=amount,
+        from_pocket_id=source_pocket.id if source_pocket else None,
+        category='Transfer to Friend',
+        merchant=recipient.full_name,
+        description=note,
+        payment_method='pocketpay_p2p',
+        extra_data={
+            'peer_user_id': recipient.id,
+            'peer_name': recipient.full_name,
+            'peer_upi': recipient.virtual_upi_id,
+            'is_p2p': True
+        }
+    )
+    tx_sender.qr_code_url = generate_qr_code(f"pocketpay://tx/{tx_sender.transaction_id}", 250)
+    db.session.add(tx_sender)
+    tx_sender.complete()
+    
+    # Incoming transaction for recipient
+    tx_recipient = Transaction(
+        transaction_id=Transaction.generate_transaction_id(),
+        user_id=recipient.id,
+        type='peer_receive',
+        amount=amount,
+        category='Received from Friend',
+        merchant=current_user.full_name,
+        description=note,
+        payment_method='pocketpay_p2p',
+        extra_data={
+            'peer_user_id': current_user.id,
+            'peer_name': current_user.full_name,
+            'peer_upi': current_user.virtual_upi_id,
+            'is_p2p': True
+        }
+    )
+    tx_recipient.qr_code_url = generate_qr_code(f"pocketpay://tx/{tx_recipient.transaction_id}", 250)
+    db.session.add(tx_recipient)
+    tx_recipient.complete()
+    
+    # Notifications
+    Notification.transaction_alert(current_user.id, tx_sender)
+    Notification.create(
+        current_user.id,
+        'Money Sent',
+        f'₹{amount:,.2f} sent to {recipient.full_name} ({recipient.virtual_upi_id or recipient.email}).',
+        'success',
+        'high'
+    )
+    
+    Notification.transaction_alert(recipient.id, tx_recipient)
+    Notification.create(
+        recipient.id,
+        'Money Received! 💰',
+        f'You received ₹{amount:,.2f} from {current_user.full_name} ({current_user.virtual_upi_id or current_user.email}).',
+        'success',
+        'high'
+    )
+    
+    db.session.commit()
+    
+    return json_response({
+        'transaction': tx_sender.to_dict(True),
+        'recipient': {
+            'id': recipient.id,
+            'full_name': recipient.full_name,
+            'virtual_upi_id': recipient.virtual_upi_id
+        },
+        'wallet_balance': current_user.wallet_balance,
+        'pocket_balance': source_pocket.current_balance if source_pocket else None,
+        'receipt_qr': tx_sender.qr_code_url
+    }, f'₹{amount:,.2f} sent successfully to {recipient.full_name}', 201)
+
+
+@bp.route('/request-money', methods=['POST'])
+@api_login_required
+def request_money():
+    """
+    Creates a new peer-to-peer money request to another PocketPay user.
+    """
+    data = request.get_json() or {}
+    recipient_identifier = str(data.get('recipient') or data.get('target') or '').strip()
+    if not recipient_identifier:
+        return error_response('Recipient or target identifier is required', 400)
+        
+    valid, msg = validate_required_fields(data, ['amount'])
+    if not valid:
+        return error_response(msg, 400)
+        
+    amount = float(data.get('amount', 0))
+    if amount <= 0:
+        return error_response('Request amount must be positive', 400)
+        
+    clean_q = recipient_identifier.lower()
+    clean_phone = re.sub(r'[\s\-]', '', recipient_identifier)
+    
+    target = User.query.filter(
+        (User.id == (int(recipient_identifier) if recipient_identifier.isdigit() and len(recipient_identifier) < 8 else -1)) |
+        (User.email == clean_q) |
+        (User.virtual_upi_id == clean_q) |
+        (User.virtual_wallet_id == recipient_identifier.upper()) |
+        (User.phone == recipient_identifier) |
+        (User.phone == clean_phone)
+    ).first()
+    
+    if not target:
+        return error_response('Target user not found on PocketPay', 404)
+        
+    if target.id == current_user.id:
+        return error_response('Cannot request money from yourself', 400)
+        
+    note = str(data.get('note', '')).strip() or f'Money request from {current_user.full_name}'
+    
+    req = MoneyRequest(
+        requester_id=current_user.id,
+        target_user_id=target.id,
+        amount=amount,
+        note=note,
+        status='pending'
+    )
+    db.session.add(req)
+    db.session.commit()
+    
+    # Notify target user
+    Notification.create(
+        target.id,
+        'Money Request Received 📬',
+        f'{current_user.full_name} requested ₹{amount:,.2f} from you. Note: "{note}"',
+        'info',
+        'high'
+    )
+    
+    return json_response({
+        'request': req.to_dict()
+    }, f'Money request for ₹{amount:,.2f} sent to {target.full_name}', 201)
+
+
+@bp.route('/requests', methods=['GET'])
+@api_login_required
+def list_money_requests():
+    """
+    Retrieves incoming and outgoing peer money requests.
+    """
+    req_type = request.args.get('type', 'all').lower()
+    status_filter = request.args.get('status', 'all').lower()
+    
+    query = MoneyRequest.query
+    if req_type == 'incoming':
+        query = query.filter_by(target_user_id=current_user.id)
+    elif req_type == 'outgoing':
+        query = query.filter_by(requester_id=current_user.id)
+    else:
+        query = query.filter(
+            (MoneyRequest.target_user_id == current_user.id) |
+            (MoneyRequest.requester_id == current_user.id)
+        )
+        
+    if status_filter != 'all':
+        query = query.filter_by(status=status_filter)
+        
+    query = query.order_by(MoneyRequest.created_at.desc())
+    requests_list = [r.to_dict() for r in query.all()]
+    
+    pending_incoming = sum(1 for r in requests_list if r['target_user_id'] == current_user.id and r['status'] == 'pending')
+    
+    return json_response({
+        'requests': requests_list,
+        'total': len(requests_list),
+        'pending_incoming_count': pending_incoming
+    })
+
+
+@bp.route('/requests/<int:req_id>/pay', methods=['POST'])
+@api_login_required
+def pay_money_request(req_id):
+    """
+    Approves and pays a pending money request from available balance or selected pocket.
+    """
+    req = MoneyRequest.query.filter_by(id=req_id, target_user_id=current_user.id, status='pending').first()
+    if not req:
+        return error_response('Pending money request not found', 404)
+        
+    data = request.get_json() or {}
+    valid, msg = validate_required_fields(data, ['pin'])
+    if not valid:
+        return error_response(msg, 400)
+        
+    pin = str(data.get('pin', '')).strip()
+    if not current_user.transaction_pin_hash:
+        return error_response('Transaction PIN not set. Please set up your PIN first.', 400, code='PIN_NOT_SET')
+        
+    pin_ok, pin_err = current_user.verify_transaction_pin(pin)
+    if not pin_ok:
+        return error_response(pin_err or 'Incorrect PIN', 401, code='INCORRECT_PIN')
+        
+    if current_user.totp_enabled:
+        totp_code = data.get('totp_code') or data.get('totp') or data.get('otp')
+        verified, err, err_code = current_user.verify_totp(totp_code)
+        if not verified:
+            return error_response(err or 'Invalid Authenticator 2FA code', 401, code=err_code or 'INCORRECT_TOTP')
+            
+    amount = req.amount
+    pocket_id = data.get('pocket_id')
+    source_pocket = None
+    
+    if pocket_id:
+        source_pocket = Pocket.query.filter_by(id=pocket_id, user_id=current_user.id, archived=False).first()
+        if not source_pocket:
+            return error_response('Selected pocket not found', 404)
+        if source_pocket.current_balance < amount:
+            return error_response(f'Insufficient balance in {source_pocket.name}', 400, code='INSUFFICIENT_POCKET_BALANCE')
+        source_pocket.deduct_money(amount)
+    else:
+        if (current_user.wallet_balance or 0.0) < amount:
+            return error_response(f'Insufficient wallet balance (Available: ₹{current_user.wallet_balance:,.2f})', 400, code='INSUFFICIENT_BALANCE')
+        current_user.wallet_balance = round(current_user.wallet_balance - amount, 2)
+        
+    requester = req.requester
+    requester.wallet_balance = round((requester.wallet_balance or 0.0) + amount, 2)
+    
+    # Sender transaction
+    tx_sender = Transaction(
+        transaction_id=Transaction.generate_transaction_id(),
+        user_id=current_user.id,
+        type='peer_send',
+        amount=amount,
+        from_pocket_id=source_pocket.id if source_pocket else None,
+        category='Money Request Paid',
+        merchant=requester.full_name,
+        description=f'Paid money request: {req.note or "Requested amount"}',
+        payment_method='pocketpay_p2p',
+        extra_data={'request_id': req.id, 'peer_user_id': requester.id}
+    )
+    tx_sender.qr_code_url = generate_qr_code(f"pocketpay://tx/{tx_sender.transaction_id}", 250)
+    db.session.add(tx_sender)
+    tx_sender.complete()
+    
+    # Requester transaction
+    tx_requester = Transaction(
+        transaction_id=Transaction.generate_transaction_id(),
+        user_id=requester.id,
+        type='peer_receive',
+        amount=amount,
+        category='Money Request Received',
+        merchant=current_user.full_name,
+        description=f'Received payment for request: {req.note or "Requested amount"}',
+        payment_method='pocketpay_p2p',
+        extra_data={'request_id': req.id, 'peer_user_id': current_user.id}
+    )
+    tx_requester.qr_code_url = generate_qr_code(f"pocketpay://tx/{tx_requester.transaction_id}", 250)
+    db.session.add(tx_requester)
+    tx_requester.complete()
+    
+    # Update request
+    req.status = 'paid'
+    req.responded_at = datetime.utcnow()
+    req.transaction_id = tx_sender.transaction_id
+    
+    Notification.transaction_alert(current_user.id, tx_sender)
+    Notification.create(
+        current_user.id,
+        'Request Paid',
+        f'You paid ₹{amount:,.2f} to {requester.full_name}.',
+        'success',
+        'high'
+    )
+    
+    Notification.transaction_alert(requester.id, tx_requester)
+    Notification.create(
+        requester.id,
+        'Money Request Paid! 💰',
+        f'{current_user.full_name} accepted and paid your request for ₹{amount:,.2f}.',
+        'success',
+        'high'
+    )
+    
+    db.session.commit()
+    
+    return json_response({
+        'request': req.to_dict(),
+        'transaction': tx_sender.to_dict(True),
+        'wallet_balance': current_user.wallet_balance,
+        'receipt_qr': tx_sender.qr_code_url
+    }, f'₹{amount:,.2f} paid successfully to {requester.full_name}')
+
+
+@bp.route('/requests/<int:req_id>/decline', methods=['POST'])
+@api_login_required
+def decline_money_request(req_id):
+    """
+    Declines an incoming money request.
+    """
+    req = MoneyRequest.query.filter_by(id=req_id, target_user_id=current_user.id, status='pending').first()
+    if not req:
+        return error_response('Pending money request not found', 404)
+        
+    req.status = 'declined'
+    req.responded_at = datetime.utcnow()
+    db.session.commit()
+    
+    Notification.create(
+        req.requester_id,
+        'Money Request Declined',
+        f'{current_user.full_name} declined your money request for ₹{req.amount:,.2f}.',
+        'info',
+        'medium'
+    )
+    
+    return json_response({
+        'request': req.to_dict()
+    }, 'Money request declined')
+

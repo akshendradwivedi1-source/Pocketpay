@@ -425,75 +425,75 @@ PP.Assistant = {
     this.scrollToBottom();
   },
 
-  processQuery(rawQuery) {
-    const q = rawQuery.toLowerCase().trim();
-    
-    // Check for guardrail violation attempts (e.g. asking to do transfer for them or asking for PIN/password)
-    const financialActionKeywords = ['transfer money for me', 'send money to', 'execute payment', 'change my balance', 'give me money', 'set balance to', 'my password is', 'what is my password', 'what is my otp', 'show otp'];
-    const hasViolation = financialActionKeywords.some(k => q.includes(k));
-    
-    if (hasViolation) {
+  async processQuery(rawQuery) {
+    const q = rawQuery.trim();
+    if (!q) return;
+
+    // Show typing indicator
+    const container = document.getElementById('assistantMessages');
+    const typingEl = PP.el('div', { class: 'assistant-msg assistant-typing', style: 'display:flex;align-items:center;gap:0.5rem;padding:0.75rem 1rem;color:var(--text-muted);font-size:0.85rem' }, [
+      PP.el('i', { 'data-lucide': 'sparkles', class: 'spin', style: 'color:var(--accent);width:16px;height:16px' }),
+      'Thinking...'
+    ]);
+    if (container) {
+      container.appendChild(typingEl);
+      PP.refreshIcons();
+      this.scrollToBottom();
+    }
+
+    try {
+      const res = await PP.API.post('/api/assistant/ask', {
+        query: q,
+        route: PP.state.currentRoute || 'dashboard',
+        history: this.messages.slice(-6).map(m => ({ sender: m.sender, text: m.text }))
+      });
+
+      if (typingEl && typingEl.parentNode) typingEl.parentNode.removeChild(typingEl);
+
+      const data = res.data || {};
+      const actionMap = {
+        transfer: () => PP.Modals.transfer?.(),
+        send_money: () => PP.Modals.sendMoney?.(data.recipient ? { recipient: data.recipient, amount: data.amount } : {}),
+        add_income: () => PP.Modals.addIncome?.(),
+        create_pocket: () => PP.Modals.createPocket?.(),
+        create_goal: () => PP.Modals.createGoal?.(),
+        balance: () => PP.navigate('dashboard'),
+        pockets: () => PP.navigate('pockets'),
+        analytics: () => PP.navigate('analytics'),
+        transactions: () => PP.navigate('transactions'),
+        budgets: () => PP.navigate('budgets'),
+        wallet: () => PP.navigate('wallet'),
+        view_premium: () => PP.navigate('premium'),
+        totp_setup: () => PP.Modals.setupTotp?.() || PP.navigate('wallet'),
+        change_pin: () => PP.Modals.changePin?.() || PP.navigate('wallet'),
+        settings: () => PP.navigate('wallet'),
+      };
+
+      const mappedActions = (data.actions || []).map(act => ({
+        label: act.label,
+        icon: act.icon || 'arrow-right',
+        fn: actionMap[act.action] || (() => PP.navigate(act.action || 'dashboard'))
+      }));
+
       this.addAssistantMessage({
-        title: 'Security Notice',
-        text: '🛡️ <b>For your security:</b> As an AI Guide, I cannot execute financial transfers, modify account balances, or access private passwords/OTPs.<br><br>You can safely perform this action yourself using the secure interface:',
+        title: data.title,
+        text: data.message || 'I am ready to help you manage PocketPay.',
+        actions: mappedActions,
+        suggestedPrompts: data.suggested_prompts || []
+      });
+
+    } catch (err) {
+      if (typingEl && typingEl.parentNode) typingEl.parentNode.removeChild(typingEl);
+      // Offline / client fallback
+      this.addAssistantMessage({
+        title: 'PocketPay Assistant',
+        text: 'You can check your balance on the dashboard, create smart pockets, transfer funds with your 4-digit PIN, or set savings goals.',
         actions: [
-          { label: 'Open Transfer', icon: 'refresh-ccw', fn: () => PP.Modals.transfer() },
-          { label: 'Make Payment', icon: 'arrow-up-right', fn: () => PP.Modals.addExpense() },
-        ],
+          { label: 'Check Balance', icon: 'wallet', fn: () => PP.navigate('dashboard') },
+          { label: 'Manage Pockets', icon: 'wallet-cards', fn: () => PP.navigate('pockets') }
+        ]
       });
-      return;
     }
-
-    // Match against knowledge base
-    let bestMatch = null;
-    let maxScore = 0;
-
-    for (const item of this.knowledgeBase) {
-      let score = 0;
-      for (const kw of item.keywords) {
-        if (q.includes(kw)) {
-          score += kw.length; // weight longer keyword matches higher
-        }
-      }
-      if (score > maxScore) {
-        maxScore = score;
-        bestMatch = item;
-      }
-    }
-
-    if (bestMatch && maxScore > 2) {
-      this.addAssistantMessage({
-        title: bestMatch.title,
-        text: bestMatch.text,
-        actions: bestMatch.actions || [],
-      });
-      return;
-    }
-
-    // Contextual fallback response
-    const currentRoute = PP.state.currentRoute || 'dashboard';
-    const fallbackGuidance = {
-      dashboard: 'You are currently on the <b>Dashboard</b>. Here you can view your total Net Worth, monthly spending vs income, quick action buttons, and your active smart pockets.',
-      pockets: 'You are on the <b>Pockets</b> organizer. You can create unlimited pockets, drag cards to reorder them, set budget limits, and view individual pocket balances.',
-      'pocket-detail': 'You are viewing a specific <b>Pocket Detail</b> page. You can make payments from this pocket, deposit funds, transfer to another pocket, or inspect transaction history.',
-      transactions: 'You are on the <b>Transactions</b> ledger. Filter by date, pocket, or category, edit transaction notes, or download a complete CSV report.',
-      analytics: 'You are on the <b>Analytics & Reports</b> page. View your category breakdowns, spending trends, and month-over-month savings metrics.',
-      budgets: 'You are in <b>Budgets</b>. Set proactive spending thresholds and receive automated alerts when approaching your limits.',
-      wallet: 'You are in <b>My Wallet</b>. Manage your top-ups, withdrawals, scannable payment QR code, and saved income distribution rules.',
-    };
-
-    const routeText = fallbackGuidance[currentRoute] || 'PocketPay helps you organize every rupee across custom pockets, split income intelligently, and track your savings.';
-
-    this.addAssistantMessage({
-      title: 'How can I guide you?',
-      text: `${routeText}<br><br>Here are some things you can try:`,
-      actions: [
-        { label: 'Create a Pocket', icon: 'folder-plus', fn: () => PP.Modals.createPocket() },
-        { label: 'Add Income', icon: 'arrow-down-left', fn: () => PP.Modals.addIncome() },
-        { label: 'Transfer Money', icon: 'refresh-ccw', fn: () => PP.Modals.transfer() },
-        { label: 'View Reports', icon: 'pie-chart', fn: () => PP.navigate('analytics') },
-      ],
-    });
   },
 
   clearChat() {

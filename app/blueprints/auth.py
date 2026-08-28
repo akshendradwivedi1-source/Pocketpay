@@ -36,7 +36,7 @@ def register():
         return error_response('Full name must be at least 2 characters', 400)
     
     try:
-        validate_email(email)
+        validate_email(email, check_deliverability=False)
     except EmailNotValidError as e:
         return error_response(f'Invalid email address: {str(e)}', 400)
     
@@ -599,8 +599,9 @@ def link_bank_account():
     ifsc = str(data.get('ifsc_code', '')).strip().upper()
     initial_balance = float(data.get('initial_balance', 25000.0) or 25000.0)
     
-    # Strictly mask account number (never store full real credentials or PINs)
-    masked = '•••• ' + (acc_num[-4:] if len(acc_num) >= 4 else acc_num)
+    clean_acc = re.sub(r'[\s\-]', '', acc_num)
+    # Mask account number for safe public display
+    masked = '•••• ' + (clean_acc[-4:] if len(clean_acc) >= 4 else clean_acc)
     now_iso = datetime.utcnow().isoformat()
     
     bank_entry = {
@@ -609,6 +610,7 @@ def link_bank_account():
         'account_holder': account_holder,
         'account_type': account_type,
         'account_mask': masked,
+        'account_number': clean_acc,
         'ifsc_code': ifsc or 'SBIN0001234',
         'balance': initial_balance,
         'status': 'verified',
@@ -725,6 +727,35 @@ def unlink_bank_account():
     }, 'Bank account disconnected successfully')
 
 
+@bp.route('/upgrade-premium', methods=['POST'])
+@api_login_required
+def upgrade_premium():
+    """
+    Simulated Sandbox Upgrade to PocketPay Premium Tier.
+    No real money charged - purely for fintech demo presentation.
+    """
+    data = request.get_json() or {}
+    plan = data.get('plan', 'annual')
+    
+    current_user.is_premium = True
+    db.session.commit()
+
+    Notification.create(
+        current_user.id,
+        '🎉 PocketPay Premium Activated (Demo)',
+        f'Your account has been upgraded to PocketPay Premium ({plan.capitalize()} plan) in sandbox demo mode.',
+        'success',
+        'high'
+    )
+
+    return json_response({
+        'user': current_user.to_dict(),
+        'is_premium': True,
+        'plan': plan,
+        'demo_mode': True
+    }, 'Congratulations! You are now a PocketPay Premium member (Demo Mode).')
+
+
 @bp.route('/delete-account', methods=['POST'])
 @api_login_required
 def delete_account():
@@ -792,7 +823,13 @@ def delete_account():
     from app.models.telegram_user import TelegramUser
     TelegramUser.query.filter_by(user_id=user_id).delete()
     
-    # 2. Record in admin audit log
+    # 2. Clean up associated Money Requests
+    from app.models.money_request import MoneyRequest
+    MoneyRequest.query.filter(
+        (MoneyRequest.requester_id == user_id) | (MoneyRequest.target_user_id == user_id)
+    ).delete()
+    
+    # 3. Record in admin audit log
     from app.models.admin_audit_log import AdminAuditLog
     AdminAuditLog.record(
         admin_email=user_email,
@@ -802,7 +839,7 @@ def delete_account():
         details={'email': user_email, 'action': 'Account and all associated records permanently purged'}
     )
     
-    # 3. Permanently remove user object (cascades pockets, transactions, rules, budgets, notifications)
+    # 4. Permanently remove user object (cascades pockets, transactions, rules, budgets, notifications)
     user_to_delete = current_user._get_current_object()
     logout_user()
     db.session.delete(user_to_delete)

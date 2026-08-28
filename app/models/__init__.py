@@ -6,6 +6,8 @@ from .notification import Notification
 from .budget import Budget
 from .telegram_user import TelegramUser
 from .admin_audit_log import AdminAuditLog
+from .money_request import MoneyRequest
+from .goal import SavingsGoal
 
 __all__ = [
     'User',
@@ -16,6 +18,9 @@ __all__ = [
     'Budget',
     'TelegramUser',
     'AdminAuditLog',
+    'MoneyRequest',
+    'SavingsGoal',
     'EXPENSE_CATEGORIES',
     'INCOME_CATEGORIES'
 ]
+

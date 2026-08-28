@@ -7,6 +7,7 @@ from app.models.pocket import Pocket
 from app.models.transaction import Transaction, EXPENSE_CATEGORIES
 from app.models.budget import Budget
 from app.models.notification import Notification
+from app.models.goal import SavingsGoal
 from app.utils.helpers import (
     json_response, error_response, validate_required_fields,
     api_login_required, paginated_response, get_paginated_query
@@ -625,3 +626,223 @@ def delete_budget(budget_id):
     db.session.delete(b)
     db.session.commit()
     return json_response(message='Budget deleted')
+
+
+# =============================================================================
+# SAVINGS GOALS ENDPOINTS (Phase 11)
+# =============================================================================
+
+@bp.route('/goals', methods=['GET'])
+@api_login_required
+def get_goals():
+    """Lists all savings goals for the authenticated user"""
+    goals = SavingsGoal.query.filter_by(user_id=current_user.id).order_by(SavingsGoal.created_at.desc()).all()
+    total_target = sum(g.target_amount for g in goals)
+    total_saved = sum(g.current_amount for g in goals)
+    overall_progress = round((total_saved / total_target * 100) if total_target > 0 else 0, 1)
+
+    return json_response({
+        'items': [g.to_dict() for g in goals],
+        'total_count': len(goals),
+        'summary': {
+            'total_target': total_target,
+            'total_saved': total_saved,
+            'total_remaining': max(0.0, total_target - total_saved),
+            'overall_progress': overall_progress,
+            'completed_count': sum(1 for g in goals if g.is_completed)
+        }
+    })
+
+
+@bp.route('/goals', methods=['POST'])
+@api_login_required
+def create_goal():
+    """Creates a new savings target goal"""
+    data = request.get_json() or {}
+    valid, msg = validate_required_fields(data, ['name', 'target_amount'])
+    if not valid:
+        return error_response(msg, 400)
+
+    name = str(data.get('name', '')).strip()
+    try:
+        target = float(data.get('target_amount', 0))
+        if target <= 0:
+            return error_response('Target amount must be greater than ₹0', 400)
+    except (TypeError, ValueError):
+        return error_response('Invalid target amount', 400)
+
+    initial_amount = 0.0
+    if 'initial_amount' in data:
+        try:
+            initial_amount = max(0.0, float(data.get('initial_amount', 0)))
+        except (TypeError, ValueError):
+            initial_amount = 0.0
+
+    target_date = None
+    if data.get('target_date'):
+        try:
+            target_date = datetime.strptime(str(data['target_date']).split('T')[0], '%Y-%m-%d').date()
+        except ValueError:
+            target_date = None
+
+    goal = SavingsGoal(
+        user_id=current_user.id,
+        name=name,
+        description=str(data.get('description', '')).strip() or None,
+        target_amount=target,
+        current_amount=initial_amount,
+        target_date=target_date,
+        category=str(data.get('category', 'General')),
+        icon=str(data.get('icon', 'target')),
+        color=str(data.get('color', '#6366f1')),
+        is_completed=initial_amount >= target
+    )
+    db.session.add(goal)
+    db.session.commit()
+
+    Notification.create(
+        current_user.id,
+        'Savings Goal Created',
+        f'Goal "{name}" with target ₹{target:,.2f} has been created!',
+        'success'
+    )
+
+    return json_response({'goal': goal.to_dict()}, 'Savings goal created successfully', 201)
+
+
+@bp.route('/goals/<int:goal_id>', methods=['PUT'])
+@api_login_required
+def update_goal(goal_id):
+    """Updates savings goal parameters"""
+    goal = SavingsGoal.query.filter_by(id=goal_id, user_id=current_user.id).first()
+    if not goal:
+        return error_response('Savings goal not found', 404)
+
+    data = request.get_json() or {}
+    if 'name' in data and data['name']:
+        goal.name = str(data['name']).strip()
+    if 'description' in data:
+        goal.description = str(data['description']).strip() or None
+    if 'target_amount' in data:
+        try:
+            t = float(data['target_amount'])
+            if t > 0:
+                goal.target_amount = t
+                goal.is_completed = goal.current_amount >= goal.target_amount
+        except (TypeError, ValueError):
+            pass
+    if 'category' in data:
+        goal.category = str(data['category'])
+    if 'icon' in data:
+        goal.icon = str(data['icon'])
+    if 'color' in data:
+        goal.color = str(data['color'])
+    if 'target_date' in data:
+        if data['target_date']:
+            try:
+                goal.target_date = datetime.strptime(str(data['target_date']).split('T')[0], '%Y-%m-%d').date()
+            except ValueError:
+                pass
+        else:
+            goal.target_date = None
+
+    db.session.commit()
+    return json_response({'goal': goal.to_dict()}, 'Savings goal updated')
+
+
+@bp.route('/goals/<int:goal_id>/deposit', methods=['POST'])
+@api_login_required
+def deposit_to_goal(goal_id):
+    """Adds funds toward a savings goal from available balance or a pocket"""
+    goal = SavingsGoal.query.filter_by(id=goal_id, user_id=current_user.id).first()
+    if not goal:
+        return error_response('Savings goal not found', 404)
+
+    data = request.get_json() or {}
+    try:
+        amount = float(data.get('amount', 0))
+        if amount <= 0:
+            return error_response('Deposit amount must be greater than ₹0', 400)
+    except (TypeError, ValueError):
+        return error_response('Invalid deposit amount', 400)
+
+    source = data.get('source', 'wallet')
+    if source == 'wallet':
+        if (current_user.wallet_balance or 0.0) < amount:
+            return error_response(f'Insufficient available balance (₹{current_user.wallet_balance:,.2f})', 400)
+        current_user.wallet_balance = round(current_user.wallet_balance - amount, 2)
+    else:
+        pocket = Pocket.query.filter_by(id=int(source), user_id=current_user.id, archived=False).first()
+        if not pocket:
+            return error_response('Funding pocket not found', 404)
+        if pocket.current_balance < amount:
+            return error_response(f'Insufficient balance in {pocket.name} (₹{pocket.current_balance:,.2f})', 400)
+        pocket.deduct_money(amount)
+
+    goal.deposit(amount)
+    db.session.commit()
+
+    if goal.is_completed:
+        Notification.create(
+            current_user.id,
+            '🎉 Savings Goal Achieved!',
+            f'Congratulations! You reached your ₹{goal.target_amount:,.2f} target for "{goal.name}"!',
+            'success',
+            'high'
+        )
+
+    return json_response({
+        'goal': goal.to_dict(),
+        'wallet_balance': current_user.wallet_balance
+    }, f'₹{amount:,.2f} deposited to "{goal.name}"')
+
+
+@bp.route('/goals/<int:goal_id>/withdraw', methods=['POST'])
+@api_login_required
+def withdraw_from_goal(goal_id):
+    """Withdraws funds from a savings goal back to available wallet balance"""
+    goal = SavingsGoal.query.filter_by(id=goal_id, user_id=current_user.id).first()
+    if not goal:
+        return error_response('Savings goal not found', 404)
+
+    data = request.get_json() or {}
+    try:
+        amount = float(data.get('amount', 0))
+        if amount <= 0:
+            return error_response('Withdraw amount must be greater than ₹0', 400)
+    except (TypeError, ValueError):
+        return error_response('Invalid withdraw amount', 400)
+
+    try:
+        goal.withdraw(amount)
+        current_user.wallet_balance = round((current_user.wallet_balance or 0.0) + amount, 2)
+        db.session.commit()
+    except ValueError as ve:
+        return error_response(str(ve), 400)
+
+    return json_response({
+        'goal': goal.to_dict(),
+        'wallet_balance': current_user.wallet_balance
+    }, f'₹{amount:,.2f} withdrawn from "{goal.name}" to wallet')
+
+
+@bp.route('/goals/<int:goal_id>', methods=['DELETE'])
+@api_login_required
+def delete_goal(goal_id):
+    """Deletes savings goal, refunding any saved amount back to wallet"""
+    goal = SavingsGoal.query.filter_by(id=goal_id, user_id=current_user.id).first()
+    if not goal:
+        return error_response('Savings goal not found', 404)
+
+    saved = goal.current_amount or 0.0
+    if saved > 0:
+        current_user.wallet_balance = round((current_user.wallet_balance or 0.0) + saved, 2)
+
+    db.session.delete(goal)
+    db.session.commit()
+
+    return json_response({
+        'refunded_amount': saved,
+        'wallet_balance': current_user.wallet_balance
+    }, f'Goal "{goal.name}" deleted' + (f' and ₹{saved:,.2f} refunded to wallet' if saved > 0 else ''))
+

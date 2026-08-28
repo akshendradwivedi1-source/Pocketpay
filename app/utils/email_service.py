@@ -129,6 +129,10 @@ def send_email_async(subject, recipients, body=None, html=None):
         if html:
             msg.html = html
             
+        if app.config.get('TESTING') or app.config.get('MAIL_SUPPRESS_SEND'):
+            logger.info(f"[TESTING] Email '{subject}' suppressed for {recipient_list}.")
+            return True
+            
         mail_user = app.config.get('MAIL_USERNAME', '')
         if mail_user:
             logger.info(f"Spawning async background thread to dispatch email '{subject}' to {recipient_list}...")
