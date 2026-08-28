@@ -3,6 +3,8 @@ import logging
 import traceback
 import re
 import socket
+import json
+import requests
 from datetime import datetime
 from flask import current_app
 from flask_mail import Message
@@ -25,12 +27,27 @@ def _extract_clean_email(raw_val):
     return match.group(0) if match else raw_str
 
 
+def _mask_email(email):
+    """Safely masks email for logging without exposing full private user addresses."""
+    if not email or '@' not in email:
+        return '***'
+    parts = email.split('@', 1)
+    name = parts[0]
+    domain = parts[1]
+    if len(name) <= 2:
+        masked_name = name[0] + '*'
+    else:
+        masked_name = name[0] + '*' * (len(name) - 2) + name[-1]
+    return f"{masked_name}@{domain}"
+
+
 def get_admin_recipient_email(app):
     """
     Returns the configured administrator email address.
-    Checks ADMIN_EMAIL first, then MAIL_USERNAME (the mailbox account), then MAIL_DEFAULT_SENDER.
+    Checks POCKETPAY_ADMIN_EMAIL first, then ADMIN_EMAIL, then MAIL_USERNAME, then MAIL_DEFAULT_SENDER.
     """
     raw_admin = (
+        app.config.get('POCKETPAY_ADMIN_EMAIL') or
         app.config.get('ADMIN_EMAIL') or
         app.config.get('MAIL_USERNAME') or
         app.config.get('MAIL_DEFAULT_SENDER') or
@@ -59,21 +76,20 @@ def get_network_base_urls(app, request_obj=None):
             req_port = request_obj.environ.get('SERVER_PORT')
             if req_port:
                 port = int(req_port)
-        except:
+        except Exception:
             pass
 
     lan_ip = '127.0.0.1'
     try:
         hostname = socket.gethostname()
         lan_ip = socket.gethostbyname(hostname)
-    except:
+    except Exception:
         pass
         
     localhost_url = f"http://localhost:{port}"
     has_lan = bool(lan_ip and not lan_ip.startswith('127.'))
     lan_url = f"http://{lan_ip}:{port}" if has_lan else localhost_url
     
-    # If the user made the request via their LAN IP, prefer LAN URL as primary
     primary = localhost_url
     if request_obj and request_obj.host_url:
         req_host = request_obj.host_url.rstrip('/')
@@ -91,59 +107,233 @@ def get_network_base_urls(app, request_obj=None):
     }
 
 
-def _send_async_email(app, msg):
+# ==============================================================================
+#                 Transactional Email API Providers (HTTP REST)
+# ==============================================================================
+
+def _send_via_resend(app, sender_email, sender_name, recipients, subject, body, html):
+    """Dispatches email via Resend HTTP REST API (https://resend.com)"""
+    api_key = app.config.get('RESEND_API_KEY')
+    if not api_key:
+        return False, "RESEND_API_KEY not configured"
+    
+    # Resend default sandbox sender if custom domain isn't verified
+    from_header = f"{sender_name} <{sender_email}>" if '@' in sender_email and not sender_email.endswith('@gmail.com') else f"PocketPay <onboarding@resend.dev>"
+    if app.config.get('RESEND_FROM_EMAIL'):
+        from_header = app.config.get('RESEND_FROM_EMAIL')
+
+    payload = {
+        "from": from_header,
+        "to": recipients,
+        "subject": subject,
+        "text": body or "",
+        "html": html or body or ""
+    }
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    
+    resp = requests.post("https://api.resend.com/emails", json=payload, headers=headers, timeout=15)
+    if resp.status_code in (200, 201):
+        return True, "Delivered via Resend API"
+    return False, f"Resend API error {resp.status_code}: {resp.text}"
+
+
+def _send_via_brevo(app, sender_email, sender_name, recipients, subject, body, html):
+    """Dispatches email via Brevo / Sendinblue HTTP REST API (https://brevo.com)"""
+    api_key = app.config.get('BREVO_API_KEY')
+    if not api_key:
+        return False, "BREVO_API_KEY not configured"
+
+    payload = {
+        "sender": {"name": sender_name, "email": sender_email or "noreply@pocketpay.app"},
+        "to": [{"email": r} for r in recipients],
+        "subject": subject,
+        "textContent": body or "",
+        "htmlContent": html or body or ""
+    }
+    headers = {
+        "api-key": api_key,
+        "Content-Type": "application/json"
+    }
+
+    resp = requests.post("https://api.brevo.com/v3/smtp/email", json=payload, headers=headers, timeout=15)
+    if resp.status_code in (200, 201):
+        return True, "Delivered via Brevo API"
+    return False, f"Brevo API error {resp.status_code}: {resp.text}"
+
+
+def _send_via_sendgrid(app, sender_email, sender_name, recipients, subject, body, html):
+    """Dispatches email via SendGrid HTTP REST API (https://sendgrid.com)"""
+    api_key = app.config.get('SENDGRID_API_KEY')
+    if not api_key:
+        return False, "SENDGRID_API_KEY not configured"
+
+    payload = {
+        "personalizations": [{"to": [{"email": r} for r in recipients]}],
+        "from": {"email": sender_email or "noreply@pocketpay.app", "name": sender_name},
+        "subject": subject,
+        "content": [
+            {"type": "text/plain", "value": body or " "},
+            {"type": "text/html", "value": html or body or " "}
+        ]
+    }
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+
+    resp = requests.post("https://api.sendgrid.com/v3/mail/send", json=payload, headers=headers, timeout=15)
+    if resp.status_code in (200, 202):
+        return True, "Delivered via SendGrid API"
+    return False, f"SendGrid API error {resp.status_code}: {resp.text}"
+
+
+def _send_via_mailgun(app, sender_email, sender_name, recipients, subject, body, html):
+    """Dispatches email via Mailgun HTTP REST API (https://mailgun.com)"""
+    api_key = app.config.get('MAILGUN_API_KEY')
+    domain = app.config.get('MAILGUN_DOMAIN')
+    if not api_key or not domain:
+        return False, "MAILGUN_API_KEY or MAILGUN_DOMAIN not configured"
+
+    from_header = f"{sender_name} <{sender_email or 'noreply@' + domain}>"
+    data = {
+        "from": from_header,
+        "to": recipients,
+        "subject": subject,
+        "text": body or "",
+        "html": html or body or ""
+    }
+    resp = requests.post(
+        f"https://api.mailgun.net/v3/{domain}/messages",
+        auth=("api", api_key),
+        data=data,
+        timeout=15
+    )
+    if resp.status_code == 200:
+        return True, "Delivered via Mailgun API"
+    return False, f"Mailgun API error {resp.status_code}: {resp.text}"
+
+
+def _send_via_smtp(app, msg):
+    """Dispatches email via standard SMTP socket connection (Flask-Mail)"""
+    server = app.config.get('MAIL_SERVER', 'unknown')
+    port = app.config.get('MAIL_PORT', 'unknown')
+    mail_user = app.config.get('MAIL_USERNAME', '')
+    if not mail_user:
+        return False, "MAIL_USERNAME not configured for SMTP"
+    
+    mail.send(msg)
+    return True, f"Delivered via SMTP ({server}:{port})"
+
+
+def _dispatch_async_email(app, sender_email, sender_name, recipient_list, subject, body, html):
+    """
+    Executes in background thread: auto-detects configured transactional provider
+    or uses explicit EMAIL_PROVIDER setting with automatic fallback.
+    """
     with app.app_context():
-        recipients = msg.recipients if hasattr(msg, 'recipients') else 'recipient'
-        try:
-            server = app.config.get('MAIL_SERVER', 'unknown')
-            port = app.config.get('MAIL_PORT', 'unknown')
-            use_tls = app.config.get('MAIL_USE_TLS', False)
-            logger.info(f"Connecting to SMTP server {server}:{port} (TLS={use_tls}) for recipient {recipients}...")
-            
-            mail.send(msg)
-            
-            logger.info(f"✓ SMTP delivery SUCCEEDED for recipient {recipients} via {server}:{port}")
-        except Exception as e:
-            logger.error(f"✗ SMTP delivery FAILED for {recipients}: {type(e).__name__} - {str(e)}")
-            logger.debug(f"Full traceback: {traceback.format_exc()}")
+        masked_recipients = [_mask_email(r) for r in recipient_list]
+        provider = (app.config.get('EMAIL_PROVIDER') or 'auto').lower()
+        
+        # 1. Resend API
+        if provider == 'resend' or (provider == 'auto' and app.config.get('RESEND_API_KEY')):
+            try:
+                success, reason = _send_via_resend(app, sender_email, sender_name, recipient_list, subject, body, html)
+                if success:
+                    logger.info(f"✓ Email '{subject}' delivered to {masked_recipients} via Resend API")
+                    return
+                else:
+                    logger.warning(f"Resend delivery failed ({reason}), attempting fallback...")
+            except Exception as e:
+                logger.warning(f"Resend dispatch exception: {type(e).__name__} - {str(e)}")
+
+        # 2. Brevo (Sendinblue) API
+        if provider in ('brevo', 'sendinblue') or (provider == 'auto' and app.config.get('BREVO_API_KEY')):
+            try:
+                success, reason = _send_via_brevo(app, sender_email, sender_name, recipient_list, subject, body, html)
+                if success:
+                    logger.info(f"✓ Email '{subject}' delivered to {masked_recipients} via Brevo API")
+                    return
+                else:
+                    logger.warning(f"Brevo delivery failed ({reason}), attempting fallback...")
+            except Exception as e:
+                logger.warning(f"Brevo dispatch exception: {type(e).__name__} - {str(e)}")
+
+        # 3. SendGrid API
+        if provider == 'sendgrid' or (provider == 'auto' and app.config.get('SENDGRID_API_KEY')):
+            try:
+                success, reason = _send_via_sendgrid(app, sender_email, sender_name, recipient_list, subject, body, html)
+                if success:
+                    logger.info(f"✓ Email '{subject}' delivered to {masked_recipients} via SendGrid API")
+                    return
+                else:
+                    logger.warning(f"SendGrid delivery failed ({reason}), attempting fallback...")
+            except Exception as e:
+                logger.warning(f"SendGrid dispatch exception: {type(e).__name__} - {str(e)}")
+
+        # 4. Mailgun API
+        if provider == 'mailgun' or (provider == 'auto' and app.config.get('MAILGUN_API_KEY') and app.config.get('MAILGUN_DOMAIN')):
+            try:
+                success, reason = _send_via_mailgun(app, sender_email, sender_name, recipient_list, subject, body, html)
+                if success:
+                    logger.info(f"✓ Email '{subject}' delivered to {masked_recipients} via Mailgun API")
+                    return
+                else:
+                    logger.warning(f"Mailgun delivery failed ({reason}), attempting fallback...")
+            except Exception as e:
+                logger.warning(f"Mailgun dispatch exception: {type(e).__name__} - {str(e)}")
+
+        # 5. SMTP Fallback (Local / Traditional)
+        if provider in ('smtp', 'auto') and app.config.get('MAIL_USERNAME'):
+            try:
+                msg = Message(
+                    subject=subject,
+                    recipients=recipient_list,
+                    sender=(sender_name, sender_email) if sender_email else (app.config.get('MAIL_DEFAULT_SENDER') or 'noreply@pocketpay.app'),
+                    body=body,
+                    html=html
+                )
+                success, reason = _send_via_smtp(app, msg)
+                if success:
+                    logger.info(f"✓ Email '{subject}' delivered to {masked_recipients} via SMTP")
+                    return
+                else:
+                    logger.warning(f"SMTP delivery failed: {reason}")
+            except Exception as e:
+                logger.error(f"✗ SMTP delivery FAILED for {masked_recipients}: {type(e).__name__} - {str(e)}")
+
+        # 6. Simulated Development / Local Fallback
+        logger.info(f"ℹ [SIMULATED] Email '{subject}' dispatched to {masked_recipients} (No external email API key configured).")
 
 
 def send_email_async(subject, recipients, body=None, html=None):
+    """
+    Unified transactional asynchronous email dispatcher.
+    Dispatches via HTTP transactional APIs (Resend, Brevo, SendGrid, Mailgun) or SMTP without blocking requests.
+    """
     try:
         app = current_app._get_current_object()
         raw_sender = (app.config.get('MAIL_DEFAULT_SENDER') or app.config.get('MAIL_USERNAME') or 'noreply@pocketpay.app').strip()
-        
-        # Format sender tuple ("PocketPay", email_address) for clean inbox display
-        clean_sender_email = _extract_clean_email(raw_sender)
-        sender = ('PocketPay', clean_sender_email) if clean_sender_email else raw_sender
-            
+        clean_sender_email = _extract_clean_email(raw_sender) or 'noreply@pocketpay.app'
+        sender_name = 'PocketPay'
+
         recipient_list = recipients if isinstance(recipients, list) else [recipients]
         
-        msg = Message(
-            subject=subject,
-            recipients=recipient_list,
-            sender=sender
-        )
-        if body:
-            msg.body = body
-        if html:
-            msg.html = html
-            
         if app.config.get('TESTING') or app.config.get('MAIL_SUPPRESS_SEND'):
-            logger.info(f"[TESTING] Email '{subject}' suppressed for {recipient_list}.")
+            logger.info(f"[TESTING] Email '{subject}' suppressed for test environment.")
             return True
-            
-        mail_user = app.config.get('MAIL_USERNAME', '')
-        if mail_user:
-            logger.info(f"Spawning async background thread to dispatch email '{subject}' to {recipient_list}...")
-            thr = threading.Thread(target=_send_async_email, args=(app, msg))
-            thr.daemon = True
-            thr.start()
-        else:
-            logger.warning(f"SMTP not configured (MAIL_USERNAME empty). Email dispatch skipped for {recipient_list}.")
+
+        thr = threading.Thread(
+            target=_dispatch_async_email,
+            args=(app, clean_sender_email, sender_name, recipient_list, subject, body, html)
+        )
+        thr.daemon = True
+        thr.start()
         return True
     except Exception as e:
-        logger.error(f"Error preparing async email for {recipients}: {type(e).__name__} - {str(e)}")
+        logger.error(f"Error preparing async email dispatch: {type(e).__name__} - {str(e)}")
         return False
 
 
@@ -157,7 +347,7 @@ def send_admin_otp_request_notification(user_email, user_name="User", approval_t
         app = current_app._get_current_object()
         admin_email = get_admin_recipient_email(app)
         if not admin_email:
-            logger.error("Admin recipient email could not be determined. Please verify MAIL_USERNAME or ADMIN_EMAIL in .env.")
+            logger.error("Admin recipient email could not be determined. Please verify POCKETPAY_ADMIN_EMAIL or MAIL_USERNAME.")
             return False
             
         now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -172,17 +362,10 @@ def send_admin_otp_request_notification(user_email, user_name="User", approval_t
         body = f"""PocketPay — OTP Verification Request
 
 A user has requested email verification.
-User email:
-{user_email}
-
-User name:
-{user_name}
-
-Status:
-OTP requested — waiting for admin approval.
-
-Time:
-{now_str}
+User email: {user_email}
+User name: {user_name}
+Status: OTP requested — waiting for admin approval.
+Time: {now_str}
 
 Click the link below to approve this request and dispatch the verification code to the user:
 - Main Action: {primary_approval_url}
@@ -260,7 +443,7 @@ Notice: The actual OTP verification code is NOT included in this notification. I
           </div>
         </div>
         """
-        logger.info(f"Dispatching admin OTP request notification to {admin_email} for user {user_email}...")
+        logger.info(f"Dispatching admin OTP request notification to {_mask_email(admin_email)} for user {_mask_email(user_email)}...")
         return send_email_async(subject, admin_email, body=body, html=html)
     except Exception as e:
         logger.error(f"Failed to dispatch admin notification: {type(e).__name__} - {str(e)}")
@@ -272,7 +455,7 @@ def send_otp_email(recipient_email, otp, user_name="User", purpose="verification
     Sends the real 6-digit OTP exclusively to the user's email address.
     """
     try:
-        logger.info(f"Preparing {purpose} OTP email for user {recipient_email}...")
+        logger.info(f"Preparing {purpose} OTP email for user {_mask_email(recipient_email)}...")
         app = current_app._get_current_object()
         subject = f"PocketPay: Your {purpose.capitalize()} Verification Code is {otp}"
         expiry_min = app.config.get('OTP_EXPIRY_MINUTES', 5)
@@ -317,13 +500,10 @@ The PocketPay Team
           </div>
         </div>
         """
-        # Send OTP directly to the user's entered email
         user_email_success = send_email_async(subject, recipient_email, body=body, html=html)
-        if user_email_success:
-            logger.info(f"OTP verification email successfully queued for recipient {recipient_email}")
         return user_email_success
     except Exception as e:
-        logger.error(f"Error in send_otp_email for {recipient_email}: {type(e).__name__} - {str(e)}")
+        logger.error(f"Error in send_otp_email for {_mask_email(recipient_email)}: {type(e).__name__} - {str(e)}")
         return False
 
 

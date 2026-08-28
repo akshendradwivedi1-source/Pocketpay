@@ -40,7 +40,14 @@ class Config:
         'pool_pre_ping': True,
     }
     
-    # 3. Email (Flask-Mail) Configuration from environment
+    # 3. Email (Transactional HTTP APIs & Flask-Mail SMTP) Configuration
+    EMAIL_PROVIDER = (os.environ.get('EMAIL_PROVIDER') or 'auto').strip().lower()
+    RESEND_API_KEY = (os.environ.get('RESEND_API_KEY') or '').strip()
+    BREVO_API_KEY = (os.environ.get('BREVO_API_KEY') or os.environ.get('SENDINBLUE_API_KEY') or '').strip()
+    SENDGRID_API_KEY = (os.environ.get('SENDGRID_API_KEY') or '').strip()
+    MAILGUN_API_KEY = (os.environ.get('MAILGUN_API_KEY') or '').strip()
+    MAILGUN_DOMAIN = (os.environ.get('MAILGUN_DOMAIN') or '').strip()
+    
     MAIL_SERVER = os.environ.get('MAIL_SERVER') or 'smtp.gmail.com'
     MAIL_PORT = get_mail_port()
     MAIL_USE_TLS = os.environ.get('MAIL_USE_TLS', 'True').strip().lower() in ('true', '1', 'yes', 't')
