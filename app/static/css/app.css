@@ -2166,7 +2166,7 @@ button, input, select, textarea, a.nav-item, .bottom-item {
   }
 
   /* Modal Bottom Sheet on Mobile */
-  .modal-overlay {
+  .modal-overlay, .modal-backdrop {
     padding: 0;
     align-items: flex-end;
     background: rgba(0,0,0,0.65);
@@ -2174,15 +2174,22 @@ button, input, select, textarea, a.nav-item, .bottom-item {
     -webkit-backdrop-filter: blur(8px);
   }
 
-  .modal-container {
-    max-height: 92vh;
-    max-height: 92dvh;
+  .modal-container, .modal {
+    position: fixed !important;
+    bottom: 0 !important;
+    top: auto !important;
+    left: 0 !important;
+    right: 0 !important;
+    transform: none !important;
+    max-height: 90vh !important;
+    max-height: 90dvh !important;
     width: 100% !important;
     max-width: 100% !important;
-    border-radius: 20px 20px 0 0 !important;
+    border-radius: 24px 24px 0 0 !important;
     margin: 0 !important;
-    padding: 1.25rem 1rem max(1.25rem, var(--sab)) !important;
-    animation: modalSlideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    border-bottom: 0 !important;
+    box-shadow: 0 -10px 40px rgba(0,0,0,0.5) !important;
+    animation: modalSlideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) both !important;
   }
 
   .modal-body {

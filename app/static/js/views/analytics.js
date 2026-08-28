@@ -216,7 +216,7 @@ PP.Analytics = {
     try {
       const res = await PP.AnalyticsAPI.budgetPerformance();
       const data = res?.data || {};
-      const grid = PP.el('div', { class: 'three-col-grid' });
+      const grid = PP.el('div', { class: 'stats-grid stagger' });
       ['healthy', 'warnings', 'at_risk', 'over_budget'].forEach(k => {
         const card = PP.el('div', { class: 'stat-card glass-card' }, [
           PP.el('div', { class: 'stat-icon ' + (k === 'over_budget' ? 'expense' : (k === 'healthy' ? 'income' : 'savings')) }, [

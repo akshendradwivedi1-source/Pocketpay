@@ -5,13 +5,15 @@ PP.Wallet = {
     const wrap = PP.el('div', { style: 'display:flex;flex-direction:column;gap:1.5rem' });
     container.appendChild(wrap);
 
+    const isProfile = PP.state.route === 'profile';
     wrap.appendChild(PP.el('div', { class: 'page-header' }, [
       PP.el('div', {}, [
-        PP.el('p', { class: 'page-eyebrow' }, ['Account']),
-        PP.el('h2', { class: 'page-title' }, ['My Wallet']),
-        PP.el('p', { class: 'page-sub' }, ['Virtual wallet ID, UPI, and account security.']),
+        PP.el('p', { class: 'page-eyebrow' }, [isProfile ? 'Account & Security' : 'Account']),
+        PP.el('h2', { class: 'page-title' }, [isProfile ? 'My Profile & Wallet' : 'My Wallet']),
+        PP.el('p', { class: 'page-sub' }, ['Virtual wallet ID, UPI, linked banks, and account security.']),
       ]),
       PP.el('div', { class: 'page-actions' }, [
+        PP.el('button', { class: 'btn btn-ghost', onclick: () => PP.Modals.editProfile() }, [PP.el('i', { 'data-lucide': 'pencil' }), 'Edit Profile']),
         PP.el('button', { class: 'btn btn-outline', onclick: () => PP.Modals.scanAndPay() }, [PP.el('i', { 'data-lucide': 'qr-code' }), 'Scan & Pay']),
         PP.el('button', { class: 'btn btn-primary', onclick: () => PP.Modals.transferToBank() }, [PP.el('i', { 'data-lucide': 'landmark' }), 'Transfer to Bank']),
       ]),

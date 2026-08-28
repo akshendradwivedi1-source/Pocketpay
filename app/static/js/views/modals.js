@@ -3845,6 +3845,78 @@ PP.Modals = {
     }, ['Confirm Deposit']);
     modal.footer.appendChild(submitBtn);
     PP.refreshIcons();
+  },
+
+  async editProfile() {
+    const u = PP.state.user || {};
+    let fullNameVal = u.full_name || '';
+
+    const modal = PP.UI.modal({
+      title: 'Edit Profile',
+      subtitle: 'Update your personal details & profile info',
+      icon: 'user',
+      iconClass: 'bg-accent',
+      size: 'sm'
+    });
+
+    const body = PP.el('div', { style: 'display:flex;flex-direction:column;gap:1.1rem' }, [
+      PP.el('div', { class: 'form-group' }, [
+        PP.el('label', { class: 'form-label' }, ['Full Name *']),
+        (() => {
+          const inp = PP.el('input', { class: 'form-input', value: fullNameVal, placeholder: 'Your Name', maxlength: 100 });
+          inp.oninput = () => fullNameVal = inp.value;
+          return inp;
+        })()
+      ]),
+      PP.el('div', { class: 'form-group' }, [
+        PP.el('label', { class: 'form-label' }, ['Email Address']),
+        PP.el('div', { class: 'glass-card', style: 'padding:0.75rem 1rem;display:flex;align-items:center;justify-content:space-between;border-radius:var(--radius-md)' }, [
+          PP.el('span', { style: 'font-size:0.9rem;font-weight:500' }, [u.email || '—']),
+          PP.el('span', { class: 'chip ' + (u.email_verified ? 'success' : 'warning') }, [u.email_verified ? 'Verified' : 'Pending'])
+        ])
+      ]),
+      PP.el('div', { class: 'form-group' }, [
+        PP.el('label', { class: 'form-label' }, ['Virtual UPI ID']),
+        PP.el('div', { class: 'glass-card', style: 'padding:0.75rem 1rem;display:flex;align-items:center;justify-content:space-between;border-radius:var(--radius-md)' }, [
+          PP.el('span', { style: 'font-size:0.9rem;font-weight:600;color:var(--accent)' }, [u.virtual_upi_id || '—']),
+          PP.el('button', {
+            class: 'btn btn-ghost btn-sm',
+            onclick: () => { navigator.clipboard?.writeText(u.virtual_upi_id || ''); PP.UI.toast('Copied', 'UPI ID copied to clipboard', 'success'); }
+          }, [PP.el('i', { 'data-lucide': 'copy' })])
+        ])
+      ])
+    ]);
+
+    modal.body.innerHTML = '';
+    modal.body.appendChild(body);
+
+    modal.footer.innerHTML = '';
+    modal.footer.appendChild(PP.el('button', { class: 'btn btn-ghost', onclick: () => modal.close() }, ['Cancel']));
+    const saveBtn = PP.el('button', {
+      class: 'btn btn-primary',
+      onclick: async () => {
+        if (!fullNameVal || fullNameVal.trim().length < 2) {
+          return PP.UI.toast('Validation', 'Full name must be at least 2 characters', 'warning');
+        }
+        try {
+          saveBtn.disabled = true;
+          saveBtn.innerHTML = '<i data-lucide="loader-2" style="animation:slowSpin 1s linear infinite"></i> Saving…';
+          PP.refreshIcons();
+          await PP.Auth.updateProfile({ full_name: fullNameVal.trim() });
+          if (PP.state.user) PP.state.user.full_name = fullNameVal.trim();
+          PP.updateTopAvatar?.();
+          PP.UI.toast('Profile Updated', 'Your profile details have been updated', 'success');
+          modal.close();
+          PP.refreshCurrentView?.();
+        } catch (e) {
+          PP.UI.toast('Update Failed', e.message || 'Could not update profile', 'error');
+          saveBtn.disabled = false;
+          saveBtn.textContent = 'Save Changes';
+        }
+      }
+    }, ['Save Changes']);
+    modal.footer.appendChild(saveBtn);
+    PP.refreshIcons();
   }
 };
 
