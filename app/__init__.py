@@ -78,3 +78,15 @@ def create_app(config_name=None):
             seed_database_if_empty()
     
     return app
+
+
+# Lazy attribute fallback for default WSGI invocation (e.g. gunicorn app:app)
+_app_instance = None
+
+def __getattr__(name):
+    if name == 'app':
+        global _app_instance
+        if _app_instance is None:
+            _app_instance = create_app()
+        return _app_instance
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
