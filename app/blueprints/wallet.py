@@ -22,32 +22,42 @@ bp = Blueprint('wallet', __name__)
 def get_wallet_balance():
     pockets = Pocket.query.filter_by(user_id=current_user.id, archived=False).all()
     pocket_balance = sum(p.current_balance for p in pockets)
-    wallet_balance = current_user.wallet_balance
+    wallet_balance = current_user.wallet_balance or 0.0
+    
+    # Calculate start of current month and start of next month portably across SQLite & PostgreSQL
+    now = datetime.utcnow()
+    start_of_month = datetime(now.year, now.month, 1)
+    if now.month == 12:
+        start_of_next_month = datetime(now.year + 1, 1, 1)
+    else:
+        start_of_next_month = datetime(now.year, now.month + 1, 1)
     
     month_income = db.session.query(db.func.sum(Transaction.amount))\
         .filter(
             Transaction.user_id == current_user.id,
             Transaction.type.in_(['income', 'topup']),
-            db.func.strftime('%Y-%m', Transaction.created_at) == datetime.utcnow().strftime('%Y-%m')
-        ).scalar() or 0
+            Transaction.created_at >= start_of_month,
+            Transaction.created_at < start_of_next_month
+        ).scalar() or 0.0
     
     month_expense = db.session.query(db.func.sum(Transaction.amount))\
         .filter(
             Transaction.user_id == current_user.id,
             Transaction.type == 'expense',
-            db.func.strftime('%Y-%m', Transaction.created_at) == datetime.utcnow().strftime('%Y-%m')
-        ).scalar() or 0
+            Transaction.created_at >= start_of_month,
+            Transaction.created_at < start_of_next_month
+        ).scalar() or 0.0
     
     return json_response({
         'wallet_balance': wallet_balance,
         'pocket_balance': pocket_balance,
         'total_balance': wallet_balance + pocket_balance,
         'total_pockets': len(pockets),
-        'monthly_income': month_income,
-        'monthly_expense': month_expense,
-        'net_monthly_savings': month_income - month_expense,
-        'virtual_wallet_id': current_user.virtual_wallet_id,
-        'virtual_upi_id': current_user.virtual_upi_id,
+        'monthly_income': float(month_income),
+        'monthly_expense': float(month_expense),
+        'net_monthly_savings': float(month_income - month_expense),
+        'virtual_wallet_id': current_user.virtual_wallet_id or '',
+        'virtual_upi_id': current_user.virtual_upi_id or '',
     })
 
 

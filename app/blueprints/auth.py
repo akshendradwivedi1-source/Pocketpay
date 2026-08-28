@@ -570,16 +570,23 @@ def update_profile():
 @bp.route('/wallet-qr', methods=['GET'])
 @api_login_required
 def get_wallet_qr():
-    qr_data = f'pocketpay://wallet/{current_user.virtual_wallet_id}'
-    if current_user.virtual_upi_id:
-        qr_data = f'upi://pay?pa={current_user.virtual_upi_id}&pn={current_user.full_name}'
+    if not current_user.virtual_wallet_id or not current_user.virtual_upi_id:
+        current_user.generate_virtual_ids()
+    
+    wallet_id = current_user.virtual_wallet_id or 'PPW000000000000'
+    upi_id = current_user.virtual_upi_id or f"user{current_user.id}@pocketpay"
+    full_name = current_user.full_name or 'PocketPay User'
+    
+    qr_data = f'pocketpay://wallet/{wallet_id}'
+    if upi_id:
+        qr_data = f'upi://pay?pa={upi_id}&pn={full_name}'
     
     qr_url = generate_qr_code(qr_data, 350)
     
     return json_response({
         'qr_code_url': qr_url,
-        'wallet_id': current_user.virtual_wallet_id,
-        'upi_id': current_user.virtual_upi_id,
+        'wallet_id': wallet_id,
+        'upi_id': upi_id,
         'qr_data': qr_data
     })
 
