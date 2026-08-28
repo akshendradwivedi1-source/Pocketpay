@@ -892,9 +892,11 @@ def totp_setup():
 def totp_verify_setup():
     """Verifies the initial 6-digit TOTP code and activates 2FA for the account"""
     data = request.get_json() or {}
-    code = data.get('code')
-    secret = data.get('secret') or current_user.totp_secret
-    backup_codes = data.get('backup_codes') or current_user.totp_backup_codes or []
+    code = re.sub(r'[\x00-\x1f\s\-]', '', str(data.get('code') or '')).strip()
+    raw_secret = data.get('secret') or current_user.totp_secret
+    secret = re.sub(r'[\x00-\x1f\s]', '', str(raw_secret or '')).strip()
+    raw_backup_codes = data.get('backup_codes') or current_user.totp_backup_codes or []
+    backup_codes = [re.sub(r'[\x00-\x1f\s]', '', str(c)).upper() for c in raw_backup_codes if c]
     
     if not code:
         return error_response('6-digit verification code from your Authenticator app is required', 400, code='CODE_REQUIRED')
@@ -916,8 +918,8 @@ def totp_verify_setup():
 def totp_disable():
     """Disables Two-Factor Authentication with password verification or current code"""
     data = request.get_json() or {}
-    password = data.get('password', '').strip()
-    code = data.get('code', '').strip()
+    password = re.sub(r'[\x00]', '', str(data.get('password') or '')).strip()
+    code = re.sub(r'[\x00-\x1f\s\-]', '', str(data.get('code') or '')).strip()
     
     # Must verify password or code
     authorized = False
@@ -942,8 +944,8 @@ def totp_disable():
 def totp_regenerate_backup_codes():
     """Re-issues 8 new single-use backup recovery codes after password verification"""
     data = request.get_json() or {}
-    password = data.get('password', '').strip()
-    code = data.get('code', '').strip()
+    password = re.sub(r'[\x00]', '', str(data.get('password') or '')).strip()
+    code = re.sub(r'[\x00-\x1f\s\-]', '', str(data.get('code') or '')).strip()
     
     authorized = False
     if password and current_user.verify_password(password):

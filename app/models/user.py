@@ -1,4 +1,5 @@
 import os
+import re
 import uuid
 import random
 import string
@@ -172,10 +173,10 @@ class User(UserMixin, db.Model):
         import base64
         import secrets
         
-        secret = pyotp.random_base32()
+        secret = str(pyotp.random_base32()).replace('\x00', '').strip()
         totp = pyotp.TOTP(secret)
         
-        provisioning_uri = totp.provisioning_uri(name=self.email, issuer_name='PocketPay')
+        provisioning_uri = totp.provisioning_uri(name=str(self.email or 'user@pocketpay.app'), issuer_name='PocketPay')
         
         qr = qrcode.QRCode(
             version=1,
@@ -200,7 +201,7 @@ class User(UserMixin, db.Model):
         
         # Persist candidate secret on user record (totp_enabled stays False until verified)
         self.totp_secret = secret
-        self.totp_backup_codes = backup_codes
+        self.totp_backup_codes = list(backup_codes)
         db.session.commit()
         
         return {
@@ -213,23 +214,30 @@ class User(UserMixin, db.Model):
 
     def enable_totp(self, code, candidate_secret=None, backup_codes=None):
         import pyotp
-        active_secret = candidate_secret or self.totp_secret
-        if not active_secret or not code:
+        raw_secret = candidate_secret or self.totp_secret
+        if not raw_secret or not code:
             return False, 'Secret and verification code are required'
             
-        clean_code = ''.join(str(code).split()).replace('-', '').strip()
+        active_secret = re.sub(r'[\x00-\x1f\s]', '', str(raw_secret)).strip()
+        clean_code = re.sub(r'[\x00-\x1f\s\-]', '', str(code)).strip()
+        
         totp = pyotp.TOTP(active_secret)
         # valid_window=3 provides +/- 90 seconds tolerance for mobile phone clock drift
         if not totp.verify(clean_code, valid_window=3):
             return False, 'Invalid 6-digit code. Please verify the code in Google Authenticator or Microsoft Authenticator and ensure your device time is accurate.'
             
+        clean_backup_codes = [
+            re.sub(r'[\x00-\x1f\s]', '', str(c)).upper()
+            for c in (backup_codes or self.totp_backup_codes or [])
+            if c
+        ]
+        if not clean_backup_codes:
+            import secrets
+            clean_backup_codes = [f"{secrets.token_hex(2)}-{secrets.token_hex(2)}".upper() for _ in range(8)]
+            
         self.totp_secret = active_secret
         self.totp_enabled = True
-        if backup_codes:
-            self.totp_backup_codes = backup_codes
-        elif not self.totp_backup_codes:
-            import secrets
-            self.totp_backup_codes = [f"{secrets.token_hex(2)}-{secrets.token_hex(2)}".upper() for _ in range(8)]
+        self.totp_backup_codes = list(clean_backup_codes)
         db.session.commit()
         return True, None
 
@@ -249,7 +257,7 @@ class User(UserMixin, db.Model):
             f"{secrets.token_hex(2)}-{secrets.token_hex(2)}".upper()
             for _ in range(8)
         ]
-        self.totp_backup_codes = new_codes
+        self.totp_backup_codes = list(new_codes)
         db.session.commit()
         return new_codes, None
 
