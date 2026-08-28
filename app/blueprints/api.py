@@ -155,7 +155,9 @@ def get_color_options():
 def get_qr_image():
     import base64
     from flask import Response
-    content = request.args.get('content') or request.args.get('data') or 'pocketpay://wallet'
+    from app.utils.helpers import build_qr_wallet_url, get_public_base_url
+    default_url = build_qr_wallet_url(current_user) if (current_user and current_user.is_authenticated) else get_public_base_url()
+    content = request.args.get('content') or request.args.get('data') or default_url
     size = request.args.get('size', 300, type=int)
     data_uri = generate_qr_code(content, size)
     if not data_uri or ',' not in data_uri:
@@ -168,8 +170,9 @@ def get_qr_image():
 @bp.route('/qr/generate', methods=['POST'])
 @api_login_required
 def generate_custom_qr():
+    from app.utils.helpers import build_qr_wallet_url
     data = request.get_json() or {}
-    content = data.get('content') or f'pocketpay://user/{current_user.virtual_wallet_id}'
+    content = data.get('content') or build_qr_wallet_url(current_user)
     size = int(data.get('size', 300))
     
     qr = generate_qr_code(content, size)

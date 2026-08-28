@@ -577,17 +577,18 @@ def get_wallet_qr():
     upi_id = current_user.virtual_upi_id or f"user{current_user.id}@pocketpay"
     full_name = current_user.full_name or 'PocketPay User'
     
-    qr_data = f'pocketpay://wallet/{wallet_id}'
-    if upi_id:
-        qr_data = f'upi://pay?pa={upi_id}&pn={full_name}'
-    
-    qr_url = generate_qr_code(qr_data, 350)
+    from app.utils.helpers import build_qr_wallet_url
+    scannable_url = build_qr_wallet_url(current_user)
+    qr_url = generate_qr_code(scannable_url, 350)
+    upi_uri = f'upi://pay?pa={upi_id}&pn={full_name}'
     
     return json_response({
         'qr_code_url': qr_url,
         'wallet_id': wallet_id,
         'upi_id': upi_id,
-        'qr_data': qr_data
+        'qr_data': scannable_url,
+        'scannable_url': scannable_url,
+        'upi_uri': upi_uri
     })
 
 

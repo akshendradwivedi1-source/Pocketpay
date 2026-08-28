@@ -11,7 +11,7 @@ from app.models.user import User
 from app.models.transaction import Transaction
 from app.models.notification import Notification
 from app.models.pocket import Pocket
-from app.utils.helpers import generate_qr_code
+from app.utils.helpers import generate_qr_code, build_qr_tx_url
 
 SUPPORTED_NETBANKING_BANKS = [
     {"code": "SBIN", "name": "State Bank of India", "icon": "landmark", "popular": True},
@@ -267,7 +267,7 @@ class PayoutProvider:
                     'mode': mode.upper()
                 }
             )
-            tx_recipient.qr_code_url = generate_qr_code(f"pocketpay://tx/{tx_recipient.transaction_id}", 250)
+            tx_recipient.qr_code_url = generate_qr_code(build_qr_tx_url(tx_recipient), 250)
             db.session.add(tx_recipient)
             tx_recipient.complete()
             
@@ -303,7 +303,7 @@ class PayoutProvider:
                 'ifsc_code': ifsc
             }
         )
-        tx.qr_code_url = generate_qr_code(f"pocketpay://tx/{tx.transaction_id}", 250)
+        tx.qr_code_url = generate_qr_code(build_qr_tx_url(tx), 250)
         db.session.add(tx)
         tx.complete()
         
@@ -391,7 +391,7 @@ class PayoutProvider:
                 'source': f"pocket:{target_pocket.id}" if target_pocket else "wallet"
             }
         )
-        tx.qr_code_url = generate_qr_code(f"pocketpay://tx/{tx.transaction_id}", 250)
+        tx.qr_code_url = generate_qr_code(build_qr_tx_url(tx), 250)
         db.session.add(tx)
         tx.complete()
         

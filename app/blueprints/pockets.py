@@ -625,3 +625,22 @@ def get_pocket_transactions(pocket_id):
     return json_response(paginated_response(
         pagination, lambda t: t.to_dict(True)
     ))
+
+
+@bp.route('/<int:pocket_id>/qr', methods=['GET'])
+@api_login_required
+def get_pocket_qr(pocket_id):
+    pocket = Pocket.query.filter_by(id=pocket_id, user_id=current_user.id).first()
+    if not pocket:
+        return error_response('Pocket not found', 404)
+        
+    from app.utils.helpers import build_qr_pocket_url, generate_qr_code
+    scannable_url = build_qr_pocket_url(pocket)
+    qr_url = generate_qr_code(scannable_url, 350)
+    
+    return json_response({
+        'pocket_id': pocket.id,
+        'pocket_name': pocket.name,
+        'scannable_url': scannable_url,
+        'qr_code_url': qr_url
+    })

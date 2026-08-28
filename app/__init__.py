@@ -60,6 +60,9 @@ def create_app(config_name=None):
     from app.blueprints.admin import bp as admin_bp
     app.register_blueprint(admin_bp, url_prefix='/admin')
     
+    from app.blueprints.qr import bp as qr_bp
+    app.register_blueprint(qr_bp, url_prefix='/qr')
+    
     with app.app_context():
         from sqlalchemy import inspect, text
         db.create_all()

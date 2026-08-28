@@ -7,7 +7,7 @@ from app.models.user import User
 from app.models.pocket import Pocket
 from app.models.transaction import Transaction
 from app.models.notification import Notification
-from app.utils.helpers import generate_qr_code
+from app.utils.helpers import generate_qr_code, build_qr_tx_url
 from .service import TelegramService
 from .session import SessionManager
 from .keyboards import (
@@ -795,7 +795,7 @@ class TelegramHandler:
                 description=f'Transfer: {src_name} → {dst_name}',
                 payment_method='internal'
             )
-            tx.qr_code_url = generate_qr_code(f"pocketpay://tx/{tx.transaction_id}", 250)
+            tx.qr_code_url = generate_qr_code(build_qr_tx_url(tx), 250)
             db.session.add(tx)
             tx.complete()
 

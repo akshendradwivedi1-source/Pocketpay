@@ -560,6 +560,7 @@ PP.PocketsAPI = {
     return PP.API.post('/api/pockets/transfer', { from_pocket_id, to_pocket_id, amount, description });
   },
   transactions(id, params = {}) { return PP.API.get(`/api/pockets/${id}/transactions`, params); },
+  qr(id) { return PP.API.get(`/api/pockets/${id}/qr`); },
 };
 
 // ========== Transactions ==========

@@ -11,7 +11,8 @@ from app.models.notification import Notification
 from app.models.money_request import MoneyRequest
 from app.utils.helpers import (
     json_response, error_response, validate_required_fields,
-    api_login_required, get_paginated_query, paginated_response, generate_qr_code
+    api_login_required, get_paginated_query, paginated_response, generate_qr_code,
+    build_qr_tx_url
 )
 
 bp = Blueprint('wallet', __name__)
@@ -92,8 +93,7 @@ def wallet_topup():
     db.session.add(tx)
     tx.complete()
     
-    qr_data = f'pocketpay://tx/{tx.transaction_id}'
-    tx.qr_code_url = generate_qr_code(qr_data, 200)
+    tx.qr_code_url = generate_qr_code(build_qr_tx_url(tx), 200)
     db.session.commit()
     
     Notification.transaction_alert(current_user.id, tx)
@@ -735,7 +735,7 @@ def send_money():
             'is_p2p': True
         }
     )
-    tx_sender.qr_code_url = generate_qr_code(f"pocketpay://tx/{tx_sender.transaction_id}", 250)
+    tx_sender.qr_code_url = generate_qr_code(build_qr_tx_url(tx_sender), 250)
     db.session.add(tx_sender)
     tx_sender.complete()
     
@@ -756,7 +756,7 @@ def send_money():
             'is_p2p': True
         }
     )
-    tx_recipient.qr_code_url = generate_qr_code(f"pocketpay://tx/{tx_recipient.transaction_id}", 250)
+    tx_recipient.qr_code_url = generate_qr_code(build_qr_tx_url(tx_recipient), 250)
     db.session.add(tx_recipient)
     tx_recipient.complete()
     
@@ -953,7 +953,7 @@ def pay_money_request(req_id):
         payment_method='pocketpay_p2p',
         extra_data={'request_id': req.id, 'peer_user_id': requester.id}
     )
-    tx_sender.qr_code_url = generate_qr_code(f"pocketpay://tx/{tx_sender.transaction_id}", 250)
+    tx_sender.qr_code_url = generate_qr_code(build_qr_tx_url(tx_sender), 250)
     db.session.add(tx_sender)
     tx_sender.complete()
     
@@ -969,7 +969,7 @@ def pay_money_request(req_id):
         payment_method='pocketpay_p2p',
         extra_data={'request_id': req.id, 'peer_user_id': current_user.id}
     )
-    tx_requester.qr_code_url = generate_qr_code(f"pocketpay://tx/{tx_requester.transaction_id}", 250)
+    tx_requester.qr_code_url = generate_qr_code(build_qr_tx_url(tx_requester), 250)
     db.session.add(tx_requester)
     tx_requester.complete()
     

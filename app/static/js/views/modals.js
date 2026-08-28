@@ -835,6 +835,95 @@ PP.Modals = {
     });
   },
 
+  async showPocketQR(pocket) {
+    const modal = PP.UI.modal({
+      title: `${pocket.name} QR Code`,
+      subtitle: 'Scannable with any phone camera or Google Lens',
+      icon: 'qr-code',
+      iconClass: 'bg-accent',
+      size: 'md'
+    });
+    
+    const wrap = PP.el('div', { style: 'text-align:center;padding:1rem' });
+    wrap.innerHTML = '<p style="color:var(--text-muted);font-size:0.9rem">Generating scannable QR code…</p>';
+    modal.body.appendChild(wrap);
+
+    try {
+      const res = await PP.PocketsAPI.qr(pocket.id);
+      const qrData = res?.data;
+      if (qrData?.qr_code_url) {
+        wrap.innerHTML = `
+          <div style="background:white;padding:12px;display:inline-block;border-radius:18px;box-shadow:0 8px 30px rgba(0,0,0,0.3);margin-bottom:1rem">
+            <img src="${qrData.qr_code_url}" alt="Pocket QR" style="width:220px;height:220px;display:block;border-radius:8px"/>
+          </div>
+          <h3 style="font-size:1.15rem;font-weight:800;margin:0 0 0.25rem;color:var(--text-primary)">${pocket.name}</h3>
+          <p style="font-size:0.85rem;color:var(--text-muted);margin:0 0 1.25rem">Direct pocket destination link</p>
+          <div style="background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:12px;padding:0.75rem;margin-bottom:1.25rem;font-family:var(--font-mono);font-size:0.78rem;word-break:break-all;color:var(--accent)">
+            ${qrData.scannable_url}
+          </div>
+          <div style="display:flex;gap:0.75rem;justify-content:center">
+            <button class="btn btn-outline" onclick="navigator.clipboard.writeText('${qrData.scannable_url}');PP.UI.toast('Link Copied','Pocket destination link copied to clipboard','success')">
+              <i data-lucide="copy"></i> Copy Link
+            </button>
+            <button class="btn btn-primary" onclick="(() => {
+              const link = document.createElement('a');
+              link.href = '${qrData.qr_code_url}';
+              link.download = 'pocketpay_pocket_${pocket.id}.png';
+              document.body.appendChild(link);
+              link.click();
+              document.body.removeChild(link);
+              PP.UI.toast('QR Downloaded', 'Pocket QR image saved', 'success');
+            })()">
+              <i data-lucide="download"></i> Save QR
+            </button>
+          </div>
+        `;
+        PP.refreshIcons();
+      }
+    } catch (err) {
+      wrap.innerHTML = `<p style="color:var(--danger)">Failed to load QR code: ${err.message}</p>`;
+    }
+  },
+
+  pocketActions(pocket) {
+    const modal = PP.UI.modal({
+      title: pocket.name,
+      subtitle: 'Pocket Actions & Management',
+      icon: pocket.icon || 'wallet',
+      iconClass: 'bg-accent',
+      size: 'sm'
+    });
+
+    const menu = PP.el('div', { style: 'display:flex;flex-direction:column;gap:0.6rem' });
+    
+    const items = [
+      { label: 'Pocket QR Code', icon: 'qr-code', action: () => { modal.close(); PP.Modals.showPocketQR(pocket); } },
+      { label: 'Deposit Money', icon: 'plus-circle', action: () => { modal.close(); PP.Modals.addIncomeForPocket(pocket.id); } },
+      { label: 'Pay / Withdraw', icon: 'minus-circle', action: () => { modal.close(); PP.Modals.addExpenseForPocket(pocket.id); } },
+      { label: 'Transfer to Another Pocket', icon: 'refresh-ccw', action: () => { modal.close(); PP.Modals.transfer({ fromPocketId: pocket.id }); } },
+      { label: 'Edit Pocket Settings', icon: 'edit-3', action: () => { modal.close(); PP.Modals.editPocket(pocket); } },
+      pocket.archived
+        ? { label: 'Restore Pocket', icon: 'archive-restore', action: () => { modal.close(); PP.Modals.restorePocket(pocket); } }
+        : { label: 'Archive Pocket', icon: 'archive', action: () => { modal.close(); PP.Modals.archivePocket(pocket); } },
+      { label: 'Delete Pocket', icon: 'trash-2', danger: true, action: () => { modal.close(); PP.Modals.deletePocket(pocket); } }
+    ];
+
+    items.forEach(item => {
+      const btn = PP.el('button', {
+        class: `btn ${item.danger ? 'btn-danger' : 'btn-ghost'}`,
+        style: 'justify-content:flex-start;width:100%;padding:0.75rem 1rem;font-weight:600',
+        onclick: item.action
+      }, [
+        PP.el('i', { 'data-lucide': item.icon, style: 'margin-right:0.65rem' }),
+        item.label
+      ]);
+      menu.appendChild(btn);
+    });
+
+    modal.body.appendChild(menu);
+    PP.refreshIcons();
+  },
+
   async saveDistributionRule(rule = null) {
     const editing = !!rule;
     const pockets = PP.state.pockets?.length ? PP.state.pockets : await PP.PocketsAPI.list({ per_page: 200 }).then(r => r.data.items).catch(() => []);

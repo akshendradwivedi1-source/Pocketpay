@@ -9,7 +9,8 @@ from app.models.notification import Notification
 from app.models.budget import Budget
 from app.utils.helpers import (
     json_response, error_response, validate_required_fields,
-    api_login_required, get_paginated_query, paginated_response, generate_qr_code
+    api_login_required, get_paginated_query, paginated_response, generate_qr_code,
+    build_qr_tx_url
 )
 
 bp = Blueprint('transactions', __name__)
@@ -282,8 +283,7 @@ def execute_expense():
         db.session.add(tx)
         db.session.flush()
         
-        qr_data = f'pocketpay://receipt/{tx.transaction_id}'
-        tx.qr_code_url = generate_qr_code(qr_data, 200)
+        tx.qr_code_url = generate_qr_code(build_qr_tx_url(tx), 200)
         
         tx.complete()
         
@@ -381,7 +381,7 @@ def process_transfer():
             description=data.get('description', '').strip() or f'Transfer: {from_pocket.name} → {to_pocket.name}',
             payment_method='internal'
         )
-        tx.qr_code_url = generate_qr_code(f'pocketpay://tx/{tx.transaction_id}', 250)
+        tx.qr_code_url = generate_qr_code(build_qr_tx_url(tx), 250)
         db.session.add(tx)
         tx.complete()
         db.session.commit()

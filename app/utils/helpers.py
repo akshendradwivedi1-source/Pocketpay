@@ -157,6 +157,55 @@ def validate_required_fields(data, required_fields):
     return True, None
 
 
+def get_public_base_url(req=None):
+    """
+    Returns the production public HTTPS base URL for all generated QR links,
+    prioritizing APP_BASE_URL config or the request's public HTTPS host.
+    """
+    import os
+    if current_app:
+        configured = (current_app.config.get('APP_BASE_URL') or os.environ.get('APP_BASE_URL') or '').strip().rstrip('/')
+        if configured:
+            return configured
+    req_obj = req
+    if not req_obj:
+        try:
+            from flask import has_request_context
+            if has_request_context():
+                req_obj = request
+        except Exception:
+            pass
+    if req_obj:
+        try:
+            proto = req_obj.headers.get('X-Forwarded-Proto', 'https' if getattr(req_obj, 'is_secure', False) else 'http')
+            host = req_obj.headers.get('X-Forwarded-Host', getattr(req_obj, 'host', ''))
+            if host:
+                return f"{proto}://{host}".rstrip('/')
+        except Exception:
+            pass
+    return 'https://pocketpay-1.onrender.com'
+
+
+def build_qr_wallet_url(user, req=None):
+    base = get_public_base_url(req)
+    upi = getattr(user, 'virtual_upi_id', None) or f"{getattr(user, 'email', '').split('@')[0]}@pocketpay"
+    name = getattr(user, 'full_name', '') or 'User'
+    import urllib.parse
+    return f"{base}/qr/pay?user={urllib.parse.quote(upi)}&name={urllib.parse.quote(name)}"
+
+
+def build_qr_pocket_url(pocket, req=None):
+    base = get_public_base_url(req)
+    ref = getattr(pocket, 'uuid', None) or getattr(pocket, 'id', '')
+    return f"{base}/qr/pocket/{ref}"
+
+
+def build_qr_tx_url(tx, req=None):
+    base = get_public_base_url(req)
+    tx_id = getattr(tx, 'transaction_id', None) or getattr(tx, 'uuid', '')
+    return f"{base}/qr/tx/{tx_id}"
+
+
 def generate_qr_code(data_string, size=300):
     import qrcode
     import io
@@ -164,13 +213,13 @@ def generate_qr_code(data_string, size=300):
     try:
         qr = qrcode.QRCode(
             version=1,
-            error_correction=qrcode.constants.ERROR_CORRECT_L,
+            error_correction=qrcode.constants.ERROR_CORRECT_M,
             box_size=10,
-            border=4,
+            border=3,
         )
         qr.add_data(data_string)
         qr.make(fit=True)
-        img = qr.make_image(fill_color="black", back_color="white")
+        img = qr.make_image(fill_color="#0a0b14", back_color="#ffffff")
         img = img.resize((size, size))
         buffered = io.BytesIO()
         img.save(buffered, format="PNG")

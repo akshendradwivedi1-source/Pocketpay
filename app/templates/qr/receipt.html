@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Transaction Receipt — {{ tx.transaction_id }}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Space+Grotesk:wght@600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/css/app.css" />
+  <style>
+    body {
+      min-height: 100vh;
+      min-height: 100dvh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+      background: radial-gradient(circle at top right, rgba(99, 102, 241, 0.18), transparent 45%),
+                  radial-gradient(circle at bottom left, rgba(236, 72, 153, 0.12), transparent 45%),
+                  #0a0b14;
+      color: #e7e9f3;
+      font-family: 'Inter', sans-serif;
+    }
+    .receipt-card {
+      width: 100%;
+      max-width: 440px;
+      background: rgba(18, 20, 36, 0.92);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 26px;
+      padding: 2.25rem 1.75rem;
+      box-shadow: 0 25px 60px rgba(0, 0, 0, 0.6), 0 0 50px rgba(99, 102, 241, 0.2);
+      text-align: center;
+    }
+    .brand-header {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.6rem;
+      margin-bottom: 1.25rem;
+    }
+    .brand-logo {
+      width: 32px;
+      height: 32px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #6366f1, #ec4899);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-weight: 900;
+      font-size: 1rem;
+    }
+    .brand-name {
+      font-size: 1.1rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+    }
+    .status-icon {
+      width: 64px;
+      height: 64px;
+      border-radius: 50%;
+      background: rgba(16, 185, 129, 0.15);
+      color: #10b981;
+      border: 2px solid rgba(16, 185, 129, 0.3);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 0.75rem;
+    }
+    .tx-amount {
+      font-size: 2.2rem;
+      font-weight: 800;
+      color: #ffffff;
+      font-family: 'Space Grotesk', sans-serif;
+      letter-spacing: -0.02em;
+      margin: 0 0 0.25rem;
+    }
+    .tx-status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 0.25rem 0.75rem;
+      border-radius: 9999px;
+      font-size: 0.78rem;
+      font-weight: 700;
+      background: rgba(16, 185, 129, 0.12);
+      color: #10b981;
+      border: 1px solid rgba(16, 185, 129, 0.25);
+      margin-bottom: 1.5rem;
+    }
+    .receipt-details {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 16px;
+      padding: 1rem;
+      margin-bottom: 1.5rem;
+      text-align: left;
+    }
+    .receipt-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.45rem 0;
+      font-size: 0.85rem;
+    }
+    .receipt-row:not(:last-child) {
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    .receipt-label {
+      color: #94a3b8;
+    }
+    .receipt-value {
+      font-weight: 600;
+      color: #ffffff;
+      font-family: 'JetBrains Mono', monospace;
+      word-break: break-all;
+    }
+    .btn-action-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+    .pocketpay-btn {
+      background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+      color: white;
+      font-weight: 700;
+      padding: 0.85rem;
+      border-radius: 12px;
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      box-shadow: 0 6px 20px rgba(99, 102, 241, 0.35);
+    }
+  </style>
+</head>
+<body>
+  <div class="receipt-card">
+    <div class="brand-header">
+      <div class="brand-logo">P</div>
+      <div class="brand-name">Pocket<span style="color:#6366f1">Pay</span></div>
+    </div>
+
+    <div class="status-icon">
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+    </div>
+    <div class="tx-amount">₹{{ "%.2f"|format(tx.amount or 0) }}</div>
+    <div class="tx-status-badge">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 14 14"/></svg>
+      {{ (tx.status or 'COMPLETED').upper() }}
+    </div>
+
+    <div class="receipt-details">
+      <div class="receipt-row">
+        <span class="receipt-label">Transaction ID:</span>
+        <span class="receipt-value">{{ tx.transaction_id }}</span>
+      </div>
+      <div class="receipt-row">
+        <span class="receipt-label">Date & Time:</span>
+        <span class="receipt-value">{{ formatted_date }}</span>
+      </div>
+      <div class="receipt-row">
+        <span class="receipt-label">Type:</span>
+        <span class="receipt-value">{{ (tx.type or 'Transfer').upper() }}</span>
+      </div>
+      {% if tx.category %}
+      <div class="receipt-row">
+        <span class="receipt-label">Category:</span>
+        <span class="receipt-value">{{ tx.category }}</span>
+      </div>
+      {% endif %}
+      {% if tx.reference_number %}
+      <div class="receipt-row">
+        <span class="receipt-label">Reference / UTR:</span>
+        <span class="receipt-value">{{ tx.reference_number }}</span>
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="btn-action-group">
+      <a href="/" class="pocketpay-btn">
+        Open in PocketPay Dashboard
+      </a>
+    </div>
+  </div>
+</body>
+</html>
