@@ -8,11 +8,12 @@ def main_menu_keyboard(is_logged_in: bool = False) -> dict:
         return {
             "inline_keyboard": [
                 [
-                    {"text": "🔐 Login", "callback_data": "auth_login"},
-                    {"text": "📝 Create Account", "callback_data": "auth_register"}
+                    {"text": "🔗 How to Connect Account", "callback_data": "help_connect"},
+                    {"text": "ℹ️ Help & Guide", "callback_data": "help"}
                 ],
                 [
-                    {"text": "ℹ️ Help & Guide", "callback_data": "help"}
+                    {"text": "🆘 Support", "callback_data": "menu_support"},
+                    {"text": "📡 Bot Status", "callback_data": "menu_status"}
                 ]
             ]
         }
@@ -21,22 +22,53 @@ def main_menu_keyboard(is_logged_in: bool = False) -> dict:
         "inline_keyboard": [
             [
                 {"text": "💰 Balance", "callback_data": "menu_balance"},
-                {"text": "🗂️ My Pockets", "callback_data": "menu_pockets"}
+                {"text": "👛 My Pockets", "callback_data": "menu_pockets"}
             ],
             [
-                {"text": "➕ Create Pocket", "callback_data": "menu_create_pocket"},
-                {"text": "💸 Transfer", "callback_data": "menu_transfer"}
+                {"text": "📊 Transactions", "callback_data": "menu_transactions"},
+                {"text": "🔔 Notifications", "callback_data": "menu_notifications"}
             ],
             [
-                {"text": "📜 Transactions", "callback_data": "menu_transactions"},
-                {"text": "🏦 Bank Account", "callback_data": "menu_bank"}
-            ],
-            [
-                {"text": "⚙️ Account", "callback_data": "menu_account"},
-                {"text": "🚪 Logout", "callback_data": "menu_logout"}
+                {"text": "🆘 Support", "callback_data": "menu_support"},
+                {"text": "⚙️ Settings", "callback_data": "menu_settings"}
             ]
         ]
     }
+
+
+def settings_keyboard(notifications_enabled: bool = True) -> dict:
+    """Settings submenu keyboard"""
+    notif_text = "🔔 Notifications: Enabled (Tap to Mute)" if notifications_enabled else "🔕 Notifications: Muted (Tap to Enable)"
+    return {
+        "inline_keyboard": [
+            [{"text": notif_text, "callback_data": "toggle_tg_notifications"}],
+            [{"text": "👤 Profile Details", "callback_data": "acc_profile"}],
+            [{"text": "🚪 Disconnect Telegram", "callback_data": "menu_unlink"}],
+            [{"text": "🔙 Main Menu", "callback_data": "menu_main"}]
+        ]
+    }
+
+
+def notification_settings_keyboard(notifications_enabled: bool = True) -> dict:
+    """Notification toggle keyboard"""
+    notif_text = "🔕 Turn Off Notifications" if notifications_enabled else "🔔 Turn On Notifications"
+    return {
+        "inline_keyboard": [
+            [{"text": notif_text, "callback_data": "toggle_tg_notifications"}],
+            [{"text": "🔙 Main Menu", "callback_data": "menu_main"}]
+        ]
+    }
+
+
+def connect_telegram_keyboard() -> dict:
+    """Prompt for unlinked users"""
+    return {
+        "inline_keyboard": [
+            [{"text": "📖 How to Link Account", "callback_data": "help_connect"}],
+            [{"text": "ℹ️ Help", "callback_data": "help"}, {"text": "🆘 Support", "callback_data": "menu_support"}]
+        ]
+    }
+
 
 
 def pockets_keyboard(pockets: List[Pocket]) -> dict:

@@ -3917,8 +3917,215 @@ PP.Modals = {
     }, ['Save Changes']);
     modal.footer.appendChild(saveBtn);
     PP.refreshIcons();
+  },
+
+  // =========================================================================
+  // TELEGRAM BOT INTEGRATION MODAL
+  // =========================================================================
+  async telegramIntegrationModal() {
+    const modal = PP.UI.modal({
+      title: 'Telegram Bot & Alerts',
+      subtitle: 'Connect your PocketPay account with Telegram Bot for real-time notifications',
+      icon: 'bot',
+      iconClass: 'bg-info',
+      size: 'md'
+    });
+
+    modal.body.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:center;padding:2.5rem 1rem">
+        <i data-lucide="loader-2" style="width:32px;height:32px;animation:slowSpin 1s linear infinite;color:var(--accent)"></i>
+      </div>
+    `;
+    PP.refreshIcons();
+
+    let pollInterval = null;
+    modal.onClose = () => {
+      if (pollInterval) clearInterval(pollInterval);
+    };
+
+    const renderConnected = (status) => {
+      if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+      modal.body.innerHTML = `
+        <div class="tg-integration-box">
+          <div class="tg-header">
+            <div class="tg-brand">
+              <div class="tg-icon-badge">
+                <i data-lucide="send" style="width:22px;height:22px"></i>
+              </div>
+              <div>
+                <h4 style="margin:0;font-size:1.05rem;font-weight:700">PocketPay Bot</h4>
+                <p style="margin:0;font-size:0.82rem;color:var(--text-muted)">
+                  ${status.telegram_username ? '@' + status.telegram_username : 'ID: ' + status.telegram_id}
+                </p>
+              </div>
+            </div>
+            <span class="tg-badge-connected">
+              <i data-lucide="check-circle" style="width:14px;height:14px"></i> Connected
+            </span>
+          </div>
+
+          <div style="background:var(--bg-card);border:1px solid var(--border);padding:1rem;border-radius:12px;display:flex;flex-direction:column;gap:0.75rem">
+            <div style="display:flex;align-items:center;justify-content:space-between">
+              <div>
+                <b style="font-size:0.9rem">Transaction & Security Alerts</b>
+                <p style="margin:0;font-size:0.78rem;color:var(--text-muted)">Instant Telegram alerts on payments, top-ups, and sign-ins</p>
+              </div>
+              <label class="checkbox-row" style="margin:0">
+                <input type="checkbox" id="tgNotifToggle" ${status.notifications_enabled ? 'checked' : ''} />
+              </label>
+            </div>
+          </div>
+
+          <div style="display:flex;gap:0.6rem;flex-wrap:wrap">
+            <a href="https://t.me/${status.telegram_username || 'PocketPayBot'}" target="_blank" class="btn btn-outline btn-sm" style="flex:1;display:flex;align-items:center;justify-content:center;gap:0.4rem;text-decoration:none">
+              <i data-lucide="external-link" style="width:15px;height:15px"></i> Open Bot in Telegram
+            </a>
+            <button type="button" class="btn btn-outline btn-sm" id="tgDisconnectBtn" style="color:var(--danger);border-color:rgba(239,68,68,0.3)">
+              <i data-lucide="log-out" style="width:15px;height:15px"></i> Disconnect
+            </button>
+          </div>
+        </div>
+      `;
+
+      modal.footer.innerHTML = `
+        <button type="button" class="btn btn-ghost" onclick="this.closest('.modal-overlay').close()">Close</button>
+      `;
+
+      PP.refreshIcons();
+
+      const toggle = modal.body.querySelector('#tgNotifToggle');
+      toggle?.addEventListener('change', async () => {
+        try {
+          const res = await PP.Auth.telegramToggleNotifications();
+          PP.UI.toast('Updated', res.message || 'Notification preference saved', 'success');
+        } catch (e) {
+          PP.UI.toast('Error', e.message || 'Failed to update preference', 'error');
+          toggle.checked = !toggle.checked;
+        }
+      });
+
+      const disconnectBtn = modal.body.querySelector('#tgDisconnectBtn');
+      disconnectBtn?.addEventListener('click', async () => {
+        const confirmed = await PP.UI.confirm('Disconnect Telegram', 'Are you sure you want to unlink your Telegram account? You will stop receiving alerts.');
+        if (!confirmed) return;
+        try {
+          disconnectBtn.disabled = true;
+          await PP.Auth.telegramDisconnect();
+          if (PP.state.user) {
+            PP.state.user.telegram_linked = false;
+            PP.state.user.telegram_username = null;
+            PP.state.user.telegram_id = null;
+          }
+          PP.UI.toast('Disconnected', 'Telegram account has been unlinked', 'info');
+          PP.refreshCurrentView?.();
+          renderUnconnected();
+        } catch (e) {
+          disconnectBtn.disabled = false;
+          PP.UI.toast('Error', e.message || 'Could not disconnect Telegram', 'error');
+        }
+      });
+    };
+
+    const renderUnconnected = async () => {
+      modal.body.innerHTML = `
+        <div style="display:flex;align-items:center;justify-content:center;padding:2rem 1rem">
+          <i data-lucide="loader-2" style="width:28px;height:28px;animation:slowSpin 1s linear infinite;color:var(--accent)"></i>
+        </div>
+      `;
+      PP.refreshIcons();
+
+      try {
+        const res = await PP.Auth.telegramGenerateLinkToken();
+        const data = res.data || {};
+        const token = data.token || 'PKP000000';
+        const directLink = data.direct_link || `https://t.me/${data.bot_username || 'PocketPayBot'}?start=link_${token}`;
+        const botName = data.bot_username || 'PocketPayBot';
+
+        modal.body.innerHTML = `
+          <div style="display:flex;flex-direction:column;gap:1.25rem">
+            <div style="text-align:center">
+              <div class="tg-icon-badge" style="margin:0 auto 0.75rem">
+                <i data-lucide="send" style="width:24px;height:24px"></i>
+              </div>
+              <h3 style="margin:0 0 0.35rem;font-size:1.15rem">Connect PocketPay Bot</h3>
+              <p style="margin:0;font-size:0.85rem;color:var(--text-muted)">
+                Receive real-time transaction notifications and access your pockets directly in Telegram.
+              </p>
+            </div>
+
+            <div style="background:var(--bg-card);border:1px solid var(--border);padding:1rem;border-radius:12px;text-align:center">
+              <div style="font-size:0.8rem;color:var(--text-dim);margin-bottom:0.5rem;text-transform:uppercase;letter-spacing:1px;font-weight:600">
+                Single-Use Link Code (Valid 15 Mins)
+              </div>
+              <div class="tg-token-display" id="tgLinkCode">${token}</div>
+              <div style="font-size:0.78rem;color:var(--text-dim);margin-top:0.4rem">
+                Send <code>/link ${token}</code> in bot or tap button below
+              </div>
+            </div>
+
+            <a href="${directLink}" target="_blank" class="btn btn-primary btn-lg btn-block" style="display:flex;align-items:center;justify-content:center;gap:0.5rem;text-decoration:none">
+              <i data-lucide="send"></i> Open Telegram Bot & Link Instantly
+            </a>
+
+            <div style="background:rgba(99,102,241,0.06);border:1px solid rgba(99,102,241,0.15);border-radius:10px;padding:0.75rem 1rem;font-size:0.82rem;color:var(--text-muted)">
+              <b style="color:var(--text)">Instructions:</b><br/>
+              1. Tap <b>Open Telegram Bot</b> above<br/>
+              2. Tap <b>Start</b> in Telegram<br/>
+              3. Your account will link automatically and this dialog will update!
+            </div>
+          </div>
+        `;
+
+        modal.footer.innerHTML = `
+          <button type="button" class="btn btn-ghost" onclick="this.closest('.modal-overlay').close()">Cancel</button>
+        `;
+
+        PP.refreshIcons();
+
+        // Start background polling to auto-detect when linked
+        if (pollInterval) clearInterval(pollInterval);
+        pollInterval = setInterval(async () => {
+          try {
+            const stRes = await PP.Auth.telegramStatus();
+            if (stRes.data?.linked) {
+              clearInterval(pollInterval);
+              pollInterval = null;
+              if (PP.state.user) {
+                PP.state.user.telegram_linked = true;
+                PP.state.user.telegram_username = stRes.data.telegram_username;
+                PP.state.user.telegram_id = stRes.data.telegram_id;
+              }
+              PP.UI.toast('Telegram Connected!', 'Your account has been linked successfully.', 'success');
+              PP.refreshCurrentView?.();
+              renderConnected(stRes.data);
+            }
+          } catch {}
+        }, 3000);
+
+      } catch (e) {
+        modal.body.innerHTML = `
+          <div style="text-align:center;padding:1.5rem">
+            <p style="color:var(--danger)">Failed to generate linking token: ${e.message}</p>
+            <button type="button" class="btn btn-outline btn-sm" id="tgRetryBtn">Retry</button>
+          </div>
+        `;
+        modal.body.querySelector('#tgRetryBtn')?.addEventListener('click', () => renderUnconnected());
+      }
+    };
+
+    try {
+      const statusRes = await PP.Auth.telegramStatus();
+      if (statusRes.data?.linked) {
+        renderConnected(statusRes.data);
+      } else {
+        await renderUnconnected();
+      }
+    } catch (err) {
+      await renderUnconnected();
+    }
   }
 };
+
 
 
 // Backward compatibility aliases

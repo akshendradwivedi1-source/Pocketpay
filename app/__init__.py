@@ -68,14 +68,28 @@ def create_app(config_name=None):
         db.create_all()
         try:
             inspector = inspect(db.engine)
-            if 'users' in inspector.get_table_names():
+            tables = inspector.get_table_names()
+            if 'users' in tables:
                 columns = [c['name'] for c in inspector.get_columns('users')]
-                if 'is_admin' not in columns:
-                    with db.engine.connect() as conn:
+                with db.engine.connect() as conn:
+                    if 'is_admin' not in columns:
                         conn.execute(text("ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT 0"))
-                        conn.commit()
+                    if 'telegram_linking_token' not in columns:
+                        conn.execute(text("ALTER TABLE users ADD COLUMN telegram_linking_token VARCHAR(64)"))
+                    if 'telegram_linking_token_expires_at' not in columns:
+                        conn.execute(text("ALTER TABLE users ADD COLUMN telegram_linking_token_expires_at DATETIME"))
+                    if 'telegram_notifications_enabled' not in columns:
+                        conn.execute(text("ALTER TABLE users ADD COLUMN telegram_notifications_enabled BOOLEAN DEFAULT 1"))
+                    conn.commit()
+            if 'telegram_users' in tables:
+                tg_columns = [c['name'] for c in inspector.get_columns('telegram_users')]
+                with db.engine.connect() as conn:
+                    if 'notifications_enabled' not in tg_columns:
+                        conn.execute(text("ALTER TABLE telegram_users ADD COLUMN notifications_enabled BOOLEAN DEFAULT 1"))
+                    conn.commit()
         except Exception:
             pass
+
         if config_name != 'testing':
             from app.seeds import seed_database_if_empty
             seed_database_if_empty()

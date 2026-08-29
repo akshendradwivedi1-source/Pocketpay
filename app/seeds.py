@@ -51,8 +51,10 @@ def ensure_admin_user_exists():
             admin_user.email_verified = True
             if not admin_user.transaction_pin_hash:
                 admin_user.set_transaction_pin('1234')
-            admin_user.set_password(admin_pass)
+            if not admin_user.password_hash:
+                admin_user.set_password(admin_pass)
             db.session.commit()
+
 
 
 def ensure_demo_accounts_exist():

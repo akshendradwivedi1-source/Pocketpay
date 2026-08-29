@@ -1,7 +1,9 @@
 import os
 import logging
+from datetime import datetime
 import requests
 from typing import Optional, Dict, Any, List, Union
+
 
 logger = logging.getLogger(__name__)
 
@@ -228,4 +230,47 @@ class TelegramService:
         except Exception as e:
             logger.error(f"[Telegram API] getWebhookInfo error: {str(e)}")
             return {"ok": False, "error": "Failed to get webhook info"}
+
+    @classmethod
+    def send_event_notification(cls, user, title: str, message: str, event_type: str = 'info') -> bool:
+        """
+        Sends an account event notification directly to user's linked Telegram chat.
+        Checks if Telegram is configured, user has Telegram linked, and notifications are enabled.
+        """
+        if not cls.is_configured() or not user:
+            return False
+
+        if not getattr(user, 'telegram_notifications_enabled', True):
+            return False
+
+        try:
+            from app.models.telegram_user import TelegramUser
+            tg_user = TelegramUser.query.filter_by(user_id=user.id).first()
+            if not tg_user or not getattr(tg_user, 'notifications_enabled', True):
+                return False
+
+            chat_id = tg_user.telegram_id
+            if not chat_id:
+                return False
+
+            icons = {
+                'login': '🔐',
+                'security': '🛡️',
+                'password': '🔑',
+                'transfer': '💸',
+                'income': '💰',
+                'pocket': '👛',
+                'warning': '⚠️',
+                'success': '✅',
+                'info': '🔔'
+            }
+            icon = icons.get(event_type, '🔔')
+            formatted_text = f"{icon} <b>{title}</b>\n\n{message}\n\n<i>PocketPay Security Alert • {datetime.utcnow().strftime('%H:%M:%S UTC')}</i>"
+
+            res = cls.send_message(chat_id, formatted_text)
+            return bool(res.get('ok'))
+        except Exception as e:
+            logger.error(f"[Telegram Notification] Failed to dispatch event notification: {str(e)}")
+            return False
+
 

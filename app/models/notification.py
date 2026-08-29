@@ -57,7 +57,18 @@ class Notification(db.Model):
         )
         db.session.add(notif)
         db.session.commit()
+        
+        try:
+            from app.models.user import User
+            from app.telegram.service import TelegramService
+            user = db.session.get(User, user_id)
+            if user:
+                TelegramService.send_event_notification(user, title, message, event_type=notif_type)
+        except Exception:
+            pass
+            
         return notif
+
     
     @staticmethod
     def budget_alert(user_id, pocket, percent_used):

@@ -48,6 +48,7 @@ class TelegramHandler:
 
     @classmethod
     def handle_message(cls, message: Dict[str, Any]):
+
         """Processes incoming text messages and commands"""
         chat_id = message.get("chat", {}).get("id")
         text = str(message.get("text", "")).strip()
@@ -63,27 +64,56 @@ class TelegramHandler:
         user = session.user if session.is_authenticated else None
 
         # 1. Global Commands
-        if text.startswith("/start"):
+        parts = text.split()
+        cmd = parts[0].lower() if parts else ""
+        arg = parts[1].strip() if len(parts) > 1 else ""
+
+        if cmd == "/start":
+            if arg:
+                clean_arg = arg.replace("link_", "").strip().upper()
+                return cls.flow_link_token(chat_id, session, clean_arg)
             return cls.cmd_start(chat_id, session, user)
-        elif text.startswith("/help"):
+        elif cmd == "/link":
+            if arg:
+                clean_arg = arg.replace("link_", "").strip().upper()
+                return cls.flow_link_token(chat_id, session, clean_arg)
+            else:
+                session.set_state("WAITING_FOR_LINK_CODE")
+                return TelegramService.send_message(
+                    chat_id,
+                    "🔗 <b>Connect PocketPay Account</b>\n\nPlease enter the 8-character linking code shown on your PocketPay Settings page:\n<i>(e.g., PKP123456)</i>\n\n<i>Type /cancel to abort.</i>",
+                    reply_markup=cancel_keyboard()
+                )
+        elif cmd == "/help":
             return cls.cmd_help(chat_id, session, user)
-        elif text.startswith("/cancel"):
+        elif cmd == "/status":
+            return cls.cmd_status(chat_id, session, user)
+        elif cmd == "/support":
+            return cls.cmd_support(chat_id, session, user)
+        elif cmd == "/cancel":
             return cls.cmd_cancel(chat_id, session, user)
-        elif text.startswith("/menu"):
+        elif cmd == "/menu":
             return cls.cmd_menu(chat_id, session, user)
-        elif text.startswith("/balance"):
+        elif cmd == "/balance":
             return cls.cmd_balance(chat_id, session, user)
-        elif text.startswith("/pockets"):
+        elif cmd == "/pockets":
             return cls.cmd_pockets(chat_id, session, user)
-        elif text.startswith("/transactions"):
+        elif cmd == "/transactions":
             return cls.cmd_transactions(chat_id, session, user)
-        elif text.startswith("/logout"):
-            return cls.cmd_logout(chat_id, session)
+        elif cmd == "/notifications":
+            return cls.cmd_notifications(chat_id, session, user)
+        elif cmd == "/settings":
+            return cls.cmd_settings(chat_id, session, user)
+        elif cmd in ("/logout", "/unlink"):
+            return cls.cmd_unlink(chat_id, session)
 
         # 2. State-Based Message Flow
         state = session.state
 
-        if state == "WAITING_FOR_PHONE":
+        if state == "WAITING_FOR_LINK_CODE":
+            clean_code = text.replace(" ", "").replace("-", "").strip().upper()
+            return cls.flow_link_token(chat_id, session, clean_code)
+        elif state == "WAITING_FOR_PHONE":
             return cls.flow_login_identifier(chat_id, session, text)
         elif state == "WAITING_FOR_OTP":
             return cls.flow_login_otp(chat_id, session, text)
@@ -96,14 +126,21 @@ class TelegramHandler:
         elif state == "WAITING_FOR_TRANSFER_PIN":
             return cls.flow_transfer_pin(chat_id, session, user, text)
         else:
-            # Conversational Natural Language AI Assistant (Phase 19)
+            # Check if text looks like a linking code (e.g. PKP123456 or 6-8 chars)
+            if re.match(r'^(PKP)?[A-Z0-9]{6,8}$', text.upper()):
+                clean_code = text.replace(" ", "").replace("-", "").strip().upper()
+                # Check if it matches a valid token
+                matched = User.query.filter_by(telegram_linking_token=clean_code).first()
+                if matched:
+                    return cls.flow_link_token(chat_id, session, clean_code)
+
+            # Conversational Natural Language AI Assistant
             from app.services.assistant_service import AssistantService
             res = AssistantService.process_query(user, text, route='telegram')
             
             # Format message for Telegram HTML
             msg_html = res.get('message', '')
             msg_html = msg_html.replace('<br><br>', '\n\n').replace('<br>', '\n').replace('•', '•')
-            # Remove any unallowed HTML tags
             msg_html = re.sub(r'</?(?:span|div|p|ul|ol|li)[^>]*>', '', msg_html)
             
             title = res.get('title', '')
@@ -136,25 +173,27 @@ class TelegramHandler:
         # Acknowledge callback immediately
         TelegramService.answer_callback_query(query_id)
 
-        # Handle Callbacks
-        if data == "auth_login":
-            cls.prompt_login_identifier(chat_id, session)
-        elif data == "auth_register":
-            cls.prompt_register(chat_id)
+        # Public Callbacks
+        if data == "help_connect":
+            cls.prompt_how_to_connect(chat_id)
         elif data == "help":
             cls.cmd_help(chat_id, session, user)
+        elif data == "menu_status":
+            cls.cmd_status(chat_id, session, user)
+        elif data == "menu_support":
+            cls.cmd_support(chat_id, session, user)
         elif data == "menu_main":
             cls.cmd_start(chat_id, session, user)
         elif data == "cancel_action":
             cls.cmd_cancel(chat_id, session, user)
+        elif data == "auth_login":
+            cls.prompt_login_identifier(chat_id, session)
+        elif data == "auth_register":
+            cls.prompt_register(chat_id)
 
         # Authenticated Actions
         elif not user:
-            TelegramService.send_message(
-                chat_id,
-                "🔒 <b>Authentication Required</b>\n\nPlease log in to access this feature.",
-                reply_markup=main_menu_keyboard(is_logged_in=False)
-            )
+            cls.send_auth_required(chat_id)
         elif data == "menu_balance":
             cls.cmd_balance(chat_id, session, user)
         elif data == "menu_pockets":
@@ -165,12 +204,18 @@ class TelegramHandler:
             cls.prompt_transfer_source(chat_id, session, user)
         elif data == "menu_transactions":
             cls.cmd_transactions(chat_id, session, user)
+        elif data == "menu_notifications":
+            cls.cmd_notifications(chat_id, session, user)
+        elif data == "toggle_tg_notifications":
+            cls.toggle_notifications(chat_id, session, user)
+        elif data == "menu_settings":
+            cls.cmd_settings(chat_id, session, user)
         elif data == "menu_bank":
             cls.cmd_bank(chat_id, session, user)
         elif data == "menu_account":
             cls.cmd_account(chat_id, session, user)
-        elif data == "menu_logout":
-            cls.cmd_logout(chat_id, session)
+        elif data in ("menu_logout", "menu_unlink"):
+            cls.cmd_unlink(chat_id, session)
 
         # Pocket Detail View & Actions
         elif data.startswith("pocket_view_"):
@@ -224,18 +269,19 @@ class TelegramHandler:
                 f"🏦 <b>Welcome to PocketPay!</b>\n\n"
                 f"Hello, <b>{user.full_name}</b> 👋\n\n"
                 f"💰 <b>Available Balance:</b> ₹{user.wallet_balance:,.2f}\n"
-                f"🗂️ <b>Pockets Balance ({len(pockets)}):</b> ₹{pockets_total:,.2f}\n"
+                f"👛 <b>Pockets Balance ({len(pockets)}):</b> ₹{pockets_total:,.2f}\n"
                 f"💎 <b>Total Balance:</b> ₹{total:,.2f}\n\n"
-                f"Please choose an action below:"
+                f"Choose an option from the menu below:"
             )
             TelegramService.send_message(chat_id, msg, reply_markup=main_menu_keyboard(is_logged_in=True))
         else:
             msg = (
-                "🏦 <b>Welcome to PocketPay!</b>\n\n"
-                "Your modern personal smart wallet and intelligent pocket manager.\n\n"
-                "Please choose an option to continue:"
+                "🏦 <b>Welcome to PocketPay Bot!</b>\n\n"
+                "Your intelligent personal finance and smart pocket assistant on Telegram.\n\n"
+                "To access your account, balance, pockets, and transaction alerts, please connect your PocketPay account."
             )
-            TelegramService.send_message(chat_id, msg, reply_markup=main_menu_keyboard(is_logged_in=False))
+            from .keyboards import connect_telegram_keyboard
+            TelegramService.send_message(chat_id, msg, reply_markup=connect_telegram_keyboard())
 
     @classmethod
     def cmd_help(cls, chat_id: int, session, user: Optional[User]):
@@ -244,43 +290,172 @@ class TelegramHandler:
             "ℹ️ <b>PocketPay Telegram Bot Guide</b>\n\n"
             "<b>Available Commands:</b>\n"
             "• /start — Open the main interactive menu\n"
-            "• /balance — Check your available and pocket balances\n"
-            "• /pockets — View and manage all your smart pockets\n"
-            "• /menu — Return to the main menu\n"
-            "• /cancel — Cancel any active multi-step operation\n"
-            "• /logout — Log out of your PocketPay session\n\n"
+            "• /balance — Check available and pocket balances (Linked only)\n"
+            "• /pockets — View and manage your smart pockets (Linked only)\n"
+            "• /transactions — View recent transactions (Linked only)\n"
+            "• /notifications — Toggle account notifications\n"
+            "• /settings — Manage connection & notification preferences\n"
+            "• /status — Check bot and connection status\n"
+            "• /support — Get customer support & assistance\n"
+            "• /link &lt;code&gt; — Link PocketPay account via code\n"
+            "• /unlink — Disconnect Telegram account\n"
+            "• /cancel — Cancel active operation\n\n"
             "<b>Security:</b>\n"
-            "• Session is tied directly to your unique Telegram ID.\n"
-            "• Financial operations are verified securely with server-side validation.\n"
-            "• Your authentication credentials are safe and protected."
+            "• Your session is tied directly to your unique Telegram ID.\n"
+            "• Financial data is protected and never exposed to unlinked users.\n"
+            "• Single-use tokens expire in 15 minutes."
         )
         TelegramService.send_message(chat_id, msg, reply_markup=back_to_menu_keyboard())
 
     @classmethod
-    def cmd_cancel(cls, chat_id: int, session, user: Optional[User]):
-        """Cancels active operation and resets state"""
+    def cmd_status(cls, chat_id: int, session, user: Optional[User]):
+        """Handles /status command"""
+        bot_configured = TelegramService.is_configured()
+        is_linked = user is not None
+        status_text = (
+            "📡 <b>PocketPay Bot Status</b>\n\n"
+            f"• <b>Bot Service:</b> {'🟢 Online & Active' if bot_configured else '🔴 Offline'}\n"
+            f"• <b>Account Linked:</b> {'🟢 Yes (' + user.full_name + ')' if is_linked else '⚪ Not Connected'}\n"
+            f"• <b>Notifications:</b> {'🔔 Enabled' if (is_linked and getattr(user, 'telegram_notifications_enabled', True)) else '🔕 Muted / Disabled'}\n"
+            f"• <b>Current Server Time:</b> {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}"
+        )
+        TelegramService.send_message(chat_id, status_text, reply_markup=main_menu_keyboard(is_logged_in=is_linked))
+
+    @classmethod
+    def cmd_support(cls, chat_id: int, session, user: Optional[User]):
+        """Handles /support command"""
+        support_msg = (
+            "🆘 <b>PocketPay Support & Assistance</b>\n\n"
+            "Need help with your PocketPay wallet or pockets?\n\n"
+            "• <b>Email Support:</b> support@pocketpay.app\n"
+            "• <b>Web Portal:</b> Open PocketPay on your browser\n"
+            "• <b>Account Linking Help:</b> Tap 'How to Link Account' below\n"
+            "• <b>FAQ:</b> You can ask this bot questions anytime in plain English!"
+        )
+        TelegramService.send_message(chat_id, support_msg, reply_markup=back_to_menu_keyboard())
+
+    @classmethod
+    def prompt_how_to_connect(cls, chat_id: int):
+        """Explains how to connect PocketPay to Telegram"""
+        msg = (
+            "🔗 <b>How to Connect Your PocketPay Account</b>\n\n"
+            "1. Open PocketPay on your browser and sign in.\n"
+            "2. Navigate to <b>Settings & Security</b> (or Profile).\n"
+            "3. Find the <b>Telegram Integration</b> section and tap <b>Connect Telegram</b>.\n"
+            "4. Click the direct link to this bot, or copy the 8-character code and send it here as:\n"
+            "   <code>/link PKP123456</code>\n\n"
+            "Linking is instant, secure, and single-use!"
+        )
+        TelegramService.send_message(chat_id, msg, reply_markup=back_to_menu_keyboard())
+
+    @classmethod
+    def flow_link_token(cls, chat_id: int, session, token_str: str):
+        """Verifies single-use linking token and connects account"""
+        clean_token = token_str.strip().upper()
+        if not clean_token:
+            TelegramService.send_message(chat_id, "❌ Please enter a valid linking code (e.g. <code>/link PKP123456</code>).")
+            return
+
+        user = User.query.filter_by(telegram_linking_token=clean_token).first()
+        now = datetime.utcnow()
+
+        if not user or not user.telegram_linking_token_expires_at or user.telegram_linking_token_expires_at < now:
+            session.clear_state()
+            TelegramService.send_message(
+                chat_id,
+                "❌ <b>Invalid or Expired Link Code</b>\n\n"
+                "The link code you provided is invalid or has expired (valid for 15 minutes).\n\n"
+                "Please go to PocketPay <b>Settings → Connect Telegram</b> on your browser to generate a fresh link code.",
+                reply_markup=connect_telegram_keyboard()
+            )
+            return
+
+        # Associate Telegram User with PocketPay User
+        SessionManager.link_account(session.telegram_id, user)
+
+        # Invalidate single-use linking token
+        user.telegram_linking_token = None
+        user.telegram_linking_token_expires_at = None
+        db.session.commit()
         session.clear_state()
+
+        pockets = Pocket.query.filter_by(user_id=user.id, archived=False).all()
+        pockets_total = sum(p.current_balance for p in pockets)
+
+        success_msg = (
+            f"🎉 <b>Telegram Account Connected Successfully!</b>\n\n"
+            f"Welcome, <b>{user.full_name}</b> ({user.email})\n\n"
+            f"💰 <b>Available Balance:</b> ₹{user.wallet_balance:,.2f}\n"
+            f"👛 <b>Active Pockets ({len(pockets)}):</b> ₹{pockets_total:,.2f}\n\n"
+            f"You will now receive instant transaction alerts and can check your balances anytime."
+        )
+        TelegramService.send_message(chat_id, success_msg, reply_markup=main_menu_keyboard(is_logged_in=True))
+
+    @classmethod
+    def cmd_notifications(cls, chat_id: int, session, user: Optional[User]):
+        """Notification settings menu"""
+        if not user:
+            return cls.send_auth_required(chat_id)
+
+        from .keyboards import notification_settings_keyboard
+        is_enabled = bool(getattr(user, 'telegram_notifications_enabled', True))
+        status_str = "🟢 <b>Enabled</b>" if is_enabled else "🔴 <b>Disabled / Muted</b>"
+        msg = (
+            f"🔔 <b>Telegram Notification Settings</b>\n\n"
+            f"Current Status: {status_str}\n\n"
+            f"When enabled, you receive instant alerts for:\n"
+            f"• Money transfers and receipts\n"
+            f"• New device/login security alerts\n"
+            f"• Password updates\n"
+            f"• Pocket creations and budget milestones"
+        )
+        TelegramService.send_message(chat_id, msg, reply_markup=notification_settings_keyboard(is_enabled))
+
+    @classmethod
+    def toggle_notifications(cls, chat_id: int, session, user: User):
+        """Toggles notification preference on/off"""
+        current_val = bool(getattr(user, 'telegram_notifications_enabled', True))
+        new_val = not current_val
+        user.telegram_notifications_enabled = new_val
+        if session:
+            session.notifications_enabled = new_val
+        db.session.commit()
+
+        status_text = "enabled 🔔" if new_val else "muted 🔕"
         TelegramService.send_message(
             chat_id,
-            "↩️ Action cancelled.",
-            reply_markup=main_menu_keyboard(is_logged_in=bool(user))
+            f"✅ Telegram notifications have been <b>{status_text}</b>.",
+            reply_markup=main_menu_keyboard(is_logged_in=True)
         )
 
     @classmethod
-    def cmd_menu(cls, chat_id: int, session, user: Optional[User]):
-        """Returns to main menu"""
-        session.clear_state()
-        cls.cmd_start(chat_id, session, user)
+    def cmd_settings(cls, chat_id: int, session, user: Optional[User]):
+        """Account settings submenu"""
+        if not user:
+            return cls.send_auth_required(chat_id)
+
+        from .keyboards import settings_keyboard
+        is_notif = bool(getattr(user, 'telegram_notifications_enabled', True))
+        msg = (
+            f"⚙️ <b>PocketPay Settings</b>\n\n"
+            f"👤 <b>Linked User:</b> {user.full_name}\n"
+            f"📧 <b>Email:</b> {user.email}\n"
+            f"📱 <b>Telegram ID:</b> <code>{session.telegram_id}</code>\n"
+            f"🔔 <b>Notifications:</b> {'Enabled' if is_notif else 'Disabled'}\n"
+        )
+        TelegramService.send_message(chat_id, msg, reply_markup=settings_keyboard(is_notif))
 
     @classmethod
-    def cmd_logout(cls, chat_id: int, session):
-        """Logs user out of Telegram session"""
+    def cmd_unlink(cls, chat_id: int, session):
+        """Disconnects Telegram account"""
         SessionManager.unlink_account(session.telegram_id)
+        from .keyboards import connect_telegram_keyboard
         TelegramService.send_message(
             chat_id,
-            "🚪 <b>Logged out successfully!</b>\n\nYour Telegram session has been disconnected from PocketPay.\nTap /start to log in again.",
-            reply_markup=main_menu_keyboard(is_logged_in=False)
+            "🚪 <b>Telegram Disconnected!</b>\n\nYour Telegram account has been unlinked from PocketPay.\nYou can reconnect anytime from PocketPay Settings.",
+            reply_markup=connect_telegram_keyboard()
         )
+
 
     # =========================================================================
     # AUTHENTICATION & LOGIN FLOW
@@ -415,12 +590,19 @@ class TelegramHandler:
 
     @classmethod
     def send_auth_required(cls, chat_id: int):
-        """Standardized message for unauthenticated users"""
+        """Standardized message for unlinked / unauthenticated users"""
+        from .keyboards import connect_telegram_keyboard
         TelegramService.send_message(
             chat_id,
-            "🔒 <b>Authentication Required</b>\n\nPlease log in to your PocketPay account to view this information.",
-            reply_markup=main_menu_keyboard(is_logged_in=False)
+            "⚠️ <b>Account Not Linked</b>\n\n"
+            "Please connect your Telegram account from PocketPay Settings before accessing account information.\n\n"
+            "1. Sign in to PocketPay on your browser\n"
+            "2. Go to <b>Settings & Security</b> → <b>Connect Telegram</b>\n"
+            "3. Tap the direct link or enter your single-use link code here with:\n"
+            "   <code>/link PKP123456</code>",
+            reply_markup=connect_telegram_keyboard()
         )
+
 
     @classmethod
     def cmd_balance(cls, chat_id: int, session, user: Optional[User]):

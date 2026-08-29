@@ -15,9 +15,11 @@ class TelegramUser(db.Model):
     first_name = db.Column(db.String(128), nullable=True)
     state = db.Column(db.String(64), default='START', nullable=False)
     state_data = db.Column(db.JSON, default=dict, nullable=False)
+    notifications_enabled = db.Column(db.Boolean, default=True, nullable=False)
     last_active_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
 
     user = db.relationship('User', backref=db.backref('telegram_users', lazy='dynamic', cascade='all, delete-orphan'))
 
@@ -67,5 +69,7 @@ class TelegramUser(db.Model):
             'first_name': self.first_name,
             'state': self.state,
             'is_authenticated': self.is_authenticated,
+            'notifications_enabled': self.notifications_enabled,
             'last_active_at': self.last_active_at.isoformat() if self.last_active_at else None
         }
+

@@ -301,11 +301,23 @@ def login():
     
     login_user(user, remember=remember, force=True)
     
+    try:
+        from app.telegram.service import TelegramService
+        TelegramService.send_event_notification(
+            user,
+            'Security Alert: Account Sign-in',
+            f'Your PocketPay account ({user.email}) was just signed in.',
+            event_type='login'
+        )
+    except Exception:
+        pass
+    
     return json_response({
         'user': user.to_dict(),
         'needs_pin_setup': user.transaction_pin_hash is None,
         'needs_email_verification': not user.email_verified
     }, 'Login successful')
+
 
 
 @bp.route('/logout', methods=['GET', 'POST'])
@@ -488,12 +500,18 @@ def forgot_password():
     user = User.query.filter_by(email=email).first()
     
     if user:
-        otp = user.generate_otp(for_email=True)
-        send_otp_email(user.email, otp, user.full_name, 'password reset')
+        try:
+            otp = user.generate_otp(for_email=True)
+            send_otp_email(user.email, otp, user.full_name, 'password reset')
+        except ValueError as ve:
+            return error_response(str(ve), 429)
+        except Exception:
+            pass
     
     return json_response({
         'email': email
     }, 'If an account exists with this email, a password reset OTP has been sent.')
+
 
 
 @bp.route('/reset-password', methods=['POST'])
@@ -519,9 +537,24 @@ def reset_password():
         return error_response(error or 'Invalid or expired OTP', 400)
     
     user.password = new_password
+    # Invalidate OTP explicitly upon successful reset
+    user.email_otp = None
+    user.otp_expires_at = None
+    user.otp_resend_count = 0
     db.session.commit()
     
-    return json_response(message='Password reset successfully')
+    try:
+        from app.telegram.service import TelegramService
+        TelegramService.send_event_notification(
+            user,
+            'Security Alert: Password Reset',
+            'Your PocketPay account password was successfully reset.',
+            event_type='password'
+        )
+    except Exception:
+        pass
+    
+    return json_response(message='Password reset successfully. You can now sign in with your new password.')
 
 
 @bp.route('/update-profile', methods=['PUT'])
@@ -532,6 +565,7 @@ def update_profile():
     allowed_fields = ['full_name', 'avatar_url', 'theme_preference', 'currency_preference', 'language_preference']
     
     changes_made = False
+    password_changed = False
     for field in allowed_fields:
         if field in data and data[field] is not None:
             if field == 'full_name' and len(data[field].strip()) < 2:
@@ -548,6 +582,7 @@ def update_profile():
             return error_response('New password must be at least 8 characters', 400)
         current_user.password = new_password
         changes_made = True
+        password_changed = True
     
     if 'phone' in data and data['phone']:
         phone = data['phone'].strip()
@@ -561,6 +596,20 @@ def update_profile():
         changes_made = True
     
     if changes_made:
+        current_user.updated_at = datetime.utcnow()
+        db.session.commit()
+        if password_changed:
+            try:
+                from app.telegram.service import TelegramService
+                TelegramService.send_event_notification(
+                    current_user,
+                    'Security Alert: Password Updated',
+                    'Your PocketPay account password was updated from profile settings.',
+                    event_type='password'
+                )
+            except Exception:
+                pass
+
         current_user.updated_at = datetime.utcnow()
         db.session.commit()
     
@@ -967,5 +1016,68 @@ def totp_regenerate_backup_codes():
         'backup_codes': new_codes,
         'count': len(new_codes)
     }, 'New backup recovery codes generated. Store them safely!')
+
+
+# =============================================================================
+# TELEGRAM ACCOUNT LINKING ENDPOINTS
+# =============================================================================
+
+@bp.route('/telegram/generate-link-token', methods=['POST'])
+@api_login_required
+def generate_telegram_link_token():
+    """Generates a secure single-use linking code (valid for 15 mins) for Telegram Bot connection"""
+    token = current_user.generate_telegram_link_token()
+    from app.telegram.service import TelegramService
+    bot_info = TelegramService.get_me()
+    bot_username = bot_info.get('result', {}).get('username') if bot_info.get('ok') else 'PocketPayBot'
+    direct_link = f"https://t.me/{bot_username}?start=link_{token}"
+    
+    return json_response({
+        'token': token,
+        'bot_username': bot_username,
+        'direct_link': direct_link,
+        'expires_in_seconds': 900
+    }, 'Single-use linking code generated. Code is valid for 15 minutes.')
+
+
+@bp.route('/telegram/status', methods=['GET'])
+@api_login_required
+def get_telegram_link_status():
+    """Returns the current user's Telegram connection status and preferences"""
+    linked_tg = current_user.get_linked_telegram_user()
+    return json_response({
+        'linked': linked_tg is not None,
+        'telegram_id': linked_tg.telegram_id if linked_tg else None,
+        'telegram_username': linked_tg.username if linked_tg else None,
+        'first_name': linked_tg.first_name if linked_tg else None,
+        'notifications_enabled': bool(current_user.telegram_notifications_enabled)
+    })
+
+
+@bp.route('/telegram/toggle-notifications', methods=['POST'])
+@api_login_required
+def toggle_telegram_notifications():
+    """Toggles Telegram notifications preference on or off"""
+    current_user.telegram_notifications_enabled = not bool(current_user.telegram_notifications_enabled)
+    linked_tg = current_user.get_linked_telegram_user()
+    if linked_tg:
+        linked_tg.notifications_enabled = current_user.telegram_notifications_enabled
+    db.session.commit()
+    return json_response({
+        'notifications_enabled': bool(current_user.telegram_notifications_enabled)
+    }, f"Telegram notifications {'enabled' if current_user.telegram_notifications_enabled else 'disabled'}")
+
+
+@bp.route('/telegram/disconnect', methods=['POST'])
+@api_login_required
+def disconnect_telegram():
+    """Disconnects and unlinks the connected Telegram account"""
+    from app.models.telegram_user import TelegramUser
+    TelegramUser.query.filter_by(user_id=current_user.id).delete()
+    current_user.telegram_linking_token = None
+    current_user.telegram_linking_token_expires_at = None
+    db.session.commit()
+    return json_response({'disconnected': True}, 'Telegram account disconnected successfully')
+
 
 

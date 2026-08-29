@@ -56,9 +56,14 @@ class User(UserMixin, db.Model):
     totp_backup_codes = db.Column(db.JSON, default=list)
     totp_last_verified_counter = db.Column(db.Integer, nullable=True)
     
+    telegram_linking_token = db.Column(db.String(64), unique=True, nullable=True, index=True)
+    telegram_linking_token_expires_at = db.Column(db.DateTime, nullable=True)
+    telegram_notifications_enabled = db.Column(db.Boolean, default=True)
+    
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     last_login_at = db.Column(db.DateTime, nullable=True)
+
     
     pockets = db.relationship('Pocket', back_populates='user', cascade='all, delete-orphan', lazy='dynamic')
     transactions = db.relationship('Transaction', back_populates='user', cascade='all, delete-orphan', lazy='dynamic')
@@ -301,10 +306,25 @@ class User(UserMixin, db.Model):
             
         return False, 'Invalid Authenticator code or recovery backup code.', 'INCORRECT_TOTP'
 
+    def generate_telegram_link_token(self):
+        import secrets
+        now = datetime.utcnow()
+        # Generate clean 8-character uppercase linking code e.g. PKP-8A3F or 6-digit
+        code = 'PKP' + ''.join(random.choices(string.digits + string.ascii_uppercase, k=6))
+        self.telegram_linking_token = code
+        self.telegram_linking_token_expires_at = now + timedelta(minutes=15)
+        db.session.commit()
+        return code
+
+    def get_linked_telegram_user(self):
+        from app.models.telegram_user import TelegramUser
+        return TelegramUser.query.filter_by(user_id=self.id).first()
+
     def total_pocket_balance(self):
         return sum(p.current_balance for p in self.pockets.filter_by(archived=False).all())
 
     def to_dict(self, include_sensitive=False):
+        linked_tg = self.get_linked_telegram_user()
         data = {
             'id': self.id,
             'uuid': self.uuid,
@@ -323,6 +343,10 @@ class User(UserMixin, db.Model):
             'totp_enabled': bool(self.totp_enabled),
             'has_backup_codes': len(self.totp_backup_codes or []) > 0,
             'backup_codes_count': len(self.totp_backup_codes or []),
+            'telegram_linked': linked_tg is not None,
+            'telegram_username': linked_tg.username if linked_tg else None,
+            'telegram_id': linked_tg.telegram_id if linked_tg else None,
+            'telegram_notifications_enabled': bool(self.telegram_notifications_enabled),
             'theme_preference': self.theme_preference,
             'currency_preference': self.currency_preference,
             'linked_banks': self.linked_banks or [],
@@ -333,3 +357,4 @@ class User(UserMixin, db.Model):
             data['pin_attempts'] = self.pin_attempts
             data['pin_locked_until'] = self.pin_locked_until.isoformat() if self.pin_locked_until else None
         return data
+

@@ -240,6 +240,12 @@ PP.Wallet = {
       secCard.appendChild(PP.el('div', { style: 'display:flex;flex-direction:column;gap:.6rem' }, [
         PP.Wallet.settingRow('Transaction PIN', hasPin ? 'Enabled (Configured)' : 'Not set', 'lock', () => hasPin ? PP.Modals.changePin() : PP.Modals.setupPin()),
         PP.Wallet.settingRow(
+          'Telegram Bot & Alerts',
+          user.telegram_linked ? `Connected (${user.telegram_username ? '@' + user.telegram_username : 'ID: ' + user.telegram_id})` : 'Not Connected — Tap to Link Bot',
+          'bot',
+          () => PP.Modals.telegramIntegrationModal()
+        ),
+        PP.Wallet.settingRow(
           'Two-Factor Auth (2FA / TOTP)',
           user.totp_enabled ? 'Enabled (Google / Microsoft Authenticator)' : 'Disabled — Tap to Enable Free 2FA',
           'shield-check',
@@ -256,6 +262,7 @@ PP.Wallet = {
         PP.Wallet.settingRow('Delete Account', 'Permanently close account (balance must be ₹0)', 'alert-triangle', () => PP.Modals.deleteAccountModal()),
       ].filter(Boolean)));
       rightCol.appendChild(secCard);
+
 
       // Notifications
       const notifCard = PP.el('div', { class: 'section-card' }, [

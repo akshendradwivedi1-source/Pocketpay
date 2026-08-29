@@ -14,12 +14,23 @@ def get_database_uri():
         # Standard PostgreSQL Heroku/Render URI fix
         if raw_url.startswith('postgres://'):
             raw_url = raw_url.replace('postgres://', 'postgresql://', 1)
+            return raw_url
+        if raw_url.startswith('postgresql://'):
+            return raw_url
+        if raw_url.startswith('sqlite:///'):
+            sqlite_path = raw_url[len('sqlite:///'):]
+            if not os.path.isabs(sqlite_path):
+                instance_dir = os.path.abspath(os.path.join(BASE_DIR, '..', 'instance'))
+                os.makedirs(instance_dir, exist_ok=True)
+                return 'sqlite:///' + os.path.join(instance_dir, os.path.basename(sqlite_path)).replace('\\', '/')
+            return raw_url
         return raw_url
     
     # Default to persistent SQLite database in instance/ folder
     instance_dir = os.path.abspath(os.path.join(BASE_DIR, '..', 'instance'))
     os.makedirs(instance_dir, exist_ok=True)
     return 'sqlite:///' + os.path.join(instance_dir, 'pocketpay.db').replace('\\', '/')
+
 
 
 def get_mail_port():
