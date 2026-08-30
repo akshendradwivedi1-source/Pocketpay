@@ -2043,7 +2043,7 @@ PP.Modals = {
         return;
       }
 
-      // Automatically detect and verify Transaction Receipt QR scans
+      // 1. Automatically detect and verify Transaction Receipt QR scans
       if (qrContent.includes('/qr/tx/') || qrContent.startsWith('pocketpay://tx/') || /^(PPT|TX)[0-9A-Za-z]+/i.test(qrContent)) {
         try {
           const recRes = await PP.TxAPI.verifyReceipt(qrContent);
@@ -2057,10 +2057,69 @@ PP.Modals = {
         }
       }
 
+      // 2. Automatically detect Pocket QR scans
+      if (qrContent.includes('/qr/pocket/') || qrContent.startsWith('pocketpay://pocket/')) {
+        const pocketRef = qrContent.includes('/qr/pocket/')
+          ? qrContent.split('/qr/pocket/')[1].split('?')[0].split('/')[0].trim()
+          : qrContent.replace('pocketpay://pocket/', '').split('?')[0].split('/')[0].trim();
+        try {
+          const pRes = await PP.PocketsAPI.lookup(pocketRef);
+          if (pRes?.data?.pocket) {
+            const p = pRes.data.pocket;
+            modal.close();
+            if (p.is_owner) {
+              PP.Pockets.openDetail(p.id);
+            } else {
+              PP.Modals.scannedPocketModal(p);
+            }
+            return;
+          }
+        } catch (pErr) {
+          console.debug('[QR Scan] Pocket lookup error:', pErr);
+        }
+      }
+
+      // 3. Automatically detect Wallet QR scans
+      if (qrContent.startsWith('pocketpay://wallet/') || qrContent.includes('/qr/wallet/') || qrContent.includes('/qr/pay')) {
+        let walletIdent = '';
+        if (qrContent.includes('/qr/wallet/')) {
+          walletIdent = qrContent.split('/qr/wallet/')[1].split('?')[0].split('/')[0].trim();
+        } else if (qrContent.includes('/qr/pay')) {
+          try {
+            const u = new URL(qrContent, window.location.origin);
+            walletIdent = u.searchParams.get('user') || u.searchParams.get('upi_id') || '';
+          } catch {
+            walletIdent = '';
+          }
+        } else {
+          walletIdent = qrContent.replace('pocketpay://wallet/', '').trim();
+        }
+        if (walletIdent) {
+          modal.close();
+          PP.Modals.sendMoney({ recipient: walletIdent });
+          return;
+        }
+      }
+
       try {
         const res = await PP.PayoutsAPI.parseQR(qrContent);
         parsedRecipient = res?.data?.qr_data;
         if (parsedRecipient && parsedRecipient.valid) {
+          if (parsedRecipient.type === 'pocketpay_pocket' && parsedRecipient.pocket_id) {
+            try {
+              const pRes = await PP.PocketsAPI.lookup(parsedRecipient.pocket_id);
+              if (pRes?.data?.pocket) {
+                modal.close();
+                if (pRes.data.pocket.is_owner) {
+                  PP.Pockets.openDetail(pRes.data.pocket.id);
+                } else {
+                  PP.Modals.scannedPocketModal(pRes.data.pocket);
+                }
+                return;
+              }
+            } catch {}
+          }
+
           payeePreview.style.display = 'block';
           payeePreview.innerHTML = `
             <div style="display:flex;align-items:center;gap:0.75rem">
@@ -2101,6 +2160,71 @@ PP.Modals = {
         }
       });
     }, 0);
+
+    PP.refreshIcons();
+  },
+
+  scannedPocketModal(p) {
+    if (!p) return;
+    const modal = PP.UI.modal({
+      title: `${p.name} Pocket`,
+      subtitle: `Created by ${p.owner_name || 'PocketPay Member'}`,
+      icon: p.icon || 'folder',
+      iconClass: 'bg-accent',
+      size: 'md'
+    });
+
+    const body = PP.el('div', { style: 'display:flex;flex-direction:column;gap:1.25rem' });
+
+    // Pocket Banner & Target
+    const banner = PP.el('div', {
+      class: 'glass-card',
+      style: `padding:1.25rem;background:linear-gradient(135deg, ${p.color || '#6366f1'}22, rgba(255,255,255,0.02));border:1px solid ${p.color || '#6366f1'}55;border-radius:16px;text-align:center`
+    }, [
+      PP.el('div', {
+        style: `width:56px;height:56px;border-radius:16px;background:${p.color || '#6366f1'};color:#fff;display:inline-flex;align-items:center;justify-content:center;margin-bottom:0.75rem;box-shadow:0 8px 24px ${p.color || '#6366f1'}66`
+      }, [PP.el('i', { 'data-lucide': p.icon || 'folder', style: 'width:28px;height:28px' })]),
+      PP.el('h3', { style: 'font-size:1.3rem;font-weight:800;margin:0 0 0.35rem;color:#fff' }, [p.name]),
+      p.description ? PP.el('p', { style: 'font-size:0.88rem;color:var(--text-muted);margin:0 0 0.75rem' }, [p.description]) : null,
+      p.budget_amount > 0 ? PP.el('div', { style: 'display:inline-flex;align-items:center;gap:0.4rem;padding:0.35rem 0.85rem;background:rgba(255,255,255,0.08);border-radius:9999px;font-size:0.82rem;font-weight:700' }, [
+        'Target Goal: ', PP.fmt(p.budget_amount)
+      ]) : null
+    ].filter(Boolean));
+    body.appendChild(banner);
+
+    // Owner info & Actions
+    const infoWrap = PP.el('div', {
+      class: 'glass-card',
+      style: 'padding:1rem;border-radius:14px;display:flex;flex-direction:column;gap:0.6rem;background:rgba(255,255,255,0.02);border:1px solid var(--border)'
+    });
+    infoWrap.appendChild(PP.el('div', { style: 'display:flex;justify-content:space-between;font-size:0.88rem' }, [
+      PP.el('span', { style: 'color:var(--text-muted)' }, ['Owner']),
+      PP.el('b', {}, [p.owner_name || 'PocketPay Member'])
+    ]));
+    if (p.owner_upi) {
+      infoWrap.appendChild(PP.el('div', { style: 'display:flex;justify-content:space-between;font-size:0.88rem' }, [
+        PP.el('span', { style: 'color:var(--text-muted)' }, ['UPI ID']),
+        PP.el('span', { style: 'font-family:monospace;color:var(--accent)' }, [p.owner_upi])
+      ]));
+    }
+    body.appendChild(infoWrap);
+
+    modal.body.innerHTML = '';
+    modal.body.appendChild(body);
+
+    modal.footer.innerHTML = '';
+    modal.footer.appendChild(PP.el('button', { class: 'btn btn-ghost', onclick: () => modal.close() }, ['Close']));
+    modal.footer.appendChild(PP.el('button', {
+      class: 'btn btn-primary',
+      onclick: () => {
+        modal.close();
+        PP.Modals.sendMoney({
+          recipient: p.owner_upi || p.owner_name,
+          note: `Contribution to ${p.name} pocket`,
+          amount: p.budget_amount || ''
+        });
+      }
+    }, [PP.el('i', { 'data-lucide': 'send' }), 'Contribute / Send Money']));
 
     PP.refreshIcons();
   },

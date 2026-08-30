@@ -72,6 +72,45 @@ def get_pocket(pocket_id):
     })
 
 
+@bp.route('/lookup/<string:pocket_ref>', methods=['GET'])
+def lookup_pocket(pocket_ref):
+    """
+    Public / Authenticated endpoint to fetch sanitized pocket details for universal QR scanning.
+    """
+    clean_ref = str(pocket_ref).strip()
+    pocket = None
+    if clean_ref.isdigit():
+        pocket = Pocket.query.filter_by(id=int(clean_ref), archived=False).first()
+    if not pocket:
+        pocket = Pocket.query.filter_by(name=clean_ref, archived=False).first()
+        
+    if not pocket:
+        return error_response('Pocket not found or archived', 404)
+        
+    from app.utils.helpers import generate_qr_code, build_qr_pocket_url
+    scannable_url = build_qr_pocket_url(pocket)
+    owner_name = pocket.user.full_name if pocket.user else 'PocketPay User'
+    owner_upi = pocket.user.virtual_upi_id if pocket.user else ''
+    is_owner = bool(current_user.is_authenticated and pocket.user_id == current_user.id)
+    
+    return json_response({
+        'pocket': {
+            'id': pocket.id,
+            'name': pocket.name,
+            'description': pocket.description or '',
+            'icon': pocket.icon or 'wallet',
+            'color': pocket.color or '#6366f1',
+            'budget_amount': pocket.budget_amount or 0.0,
+            'current_balance': pocket.current_balance if is_owner else None,
+            'owner_name': owner_name,
+            'owner_upi': owner_upi,
+            'is_owner': is_owner,
+            'scannable_url': scannable_url,
+            'qr_code_url': generate_qr_code(scannable_url, 300) or f"/api/qr?content={urllib.parse.quote(scannable_url)}&size=300"
+        }
+    })
+
+
 @bp.route('', methods=['POST'])
 @api_login_required
 def create_pocket():

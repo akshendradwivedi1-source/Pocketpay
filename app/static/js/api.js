@@ -714,6 +714,7 @@ PP.PocketsAPI = {
   },
   transactions(id, params = {}) { return PP.API.get(`/api/pockets/${id}/transactions`, params); },
   qr(id) { return PP.API.get(`/api/pockets/${id}/qr`); },
+  lookup(ref) { return PP.API.get(`/api/pockets/lookup/${encodeURIComponent(ref)}`); },
 };
 
 // ========== Transactions ==========

@@ -70,7 +70,7 @@ def parse_payment_qr(qr_string: str) -> dict:
         if pocket_ref.isdigit():
             pocket = Pocket.query.filter_by(id=int(pocket_ref), archived=False).first()
         if not pocket:
-            pocket = Pocket.query.filter_by(uuid=pocket_ref, archived=False).first()
+            pocket = Pocket.query.filter_by(name=pocket_ref, archived=False).first()
             
         if pocket:
             owner_name = pocket.user.full_name if pocket.user else "Pocket Owner"

@@ -319,17 +319,43 @@ PP.Pockets = {
         PP.el('div', { class: 'flex justify-between' }, [PP.el('span', { class: 'text-muted' }, ['Created']), PP.el('b', {}, [PP.formatDate(p.created_at)])]),
       ]),
     ]);
+    const qrUrl = `/api/qr?content=${encodeURIComponent('https://pocketpay-1.onrender.com/qr/pocket/' + p.id)}&size=250`;
     const qrCard = PP.el('div', { class: 'section-card' }, [
-      PP.el('h3', { style: 'font-size:1rem;font-weight:700;margin-bottom:.75rem' }, [PP.el('i', { 'data-lucide': 'qr-code', style: 'display:inline;margin-right:.45rem;color:var(--success)' }), 'Pocket QR']),
-      PP.el('div', { style: 'text-align:center;padding:1rem;background:var(--surface);border-radius:var(--radius-lg);border:1px solid var(--border)' }, [
-        (() => {
-          const wrap = PP.el('div');
-          PP.MiscAPI.generateQR(`pocketpay://pocket/${p.id}`, 180).then(res => {
-            if (res?.data?.qr_code_url) wrap.innerHTML = `<img src="${res.data.qr_code_url}" alt="QR" style="width:180px;height:180px;margin:0 auto;border-radius:var(--radius-md)"><p style="margin-top:.75rem;font-size:.8rem;color:var(--text-muted)">Scan to view pocket</p>`;
-          }).catch(() => wrap.innerHTML = '<p style="padding:2rem">Loading QR…</p>');
-          return wrap;
-        })(),
+      PP.el('h3', { style: 'font-size:1rem;font-weight:700;margin-bottom:.75rem' }, [
+        PP.el('i', { 'data-lucide': 'qr-code', style: 'display:inline;margin-right:.45rem;color:var(--success)' }),
+        'Pocket QR Code'
       ]),
+      PP.el('div', { style: 'text-align:center;padding:1.25rem;background:#ffffff;border-radius:14px;border:1px solid var(--border);box-shadow:0 8px 24px rgba(0,0,0,0.25);margin-bottom:0.75rem' }, [
+        PP.el('img', {
+          src: qrUrl,
+          alt: `${p.name} QR`,
+          style: 'width:160px;height:160px;margin:0 auto;display:block;border-radius:8px;object-fit:contain'
+        }),
+        PP.el('p', { style: 'margin-top:.6rem;font-size:.75rem;font-weight:700;color:#0a0b14' }, ['Universal Scannable QR']),
+        PP.el('p', { style: 'font-size:.68rem;color:#64748b;margin:0' }, ['Scan with PocketPay or phone camera'])
+      ]),
+      PP.el('div', { style: 'display:flex;gap:0.5rem;justify-content:center' }, [
+        PP.el('button', {
+          class: 'btn btn-sm btn-outline',
+          style: 'flex:1',
+          onclick: () => {
+            const url = `https://pocketpay-1.onrender.com/qr/pocket/${p.id}`;
+            navigator.clipboard.writeText(url);
+            PP.UI.toast('Link Copied', 'Pocket link copied to clipboard', 'success');
+          }
+        }, [PP.el('i', { 'data-lucide': 'copy' }), 'Copy Link']),
+        PP.el('button', {
+          class: 'btn btn-sm btn-primary',
+          style: 'flex:1',
+          onclick: () => {
+            const a = document.createElement('a');
+            a.href = qrUrl;
+            a.download = `PocketPay_${p.name.replace(/\s+/g, '_')}_QR.png`;
+            a.click();
+            PP.UI.toast('Downloaded', 'Pocket QR image saved', 'success');
+          }
+        }, [PP.el('i', { 'data-lucide': 'download' }), 'Save QR'])
+      ])
     ]);
     grid.append(budgetCard, infoCard, qrCard);
     wrap.appendChild(grid);
