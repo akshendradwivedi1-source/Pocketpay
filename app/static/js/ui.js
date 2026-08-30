@@ -324,33 +324,52 @@ PP.UI = {
     });
   },
 
-  showSuccess({ title = 'Success', subtitle = '', meta = {}, qrCode = null, qr_code_url = null, autoClose = 3200, onClick = null }) {
+  showSuccess({ title = 'Success', subtitle = '', sub = '', meta = {}, qrCode = null, qr_code_url = null, autoClose = 3200, onClick = null } = {}) {
     const overlay = PP.$('#successOverlay');
-    PP.$('#successTitle', overlay).textContent = title;
-    PP.$('#successSub', overlay).textContent = subtitle;
+    if (!overlay) return;
+    const titleEl = PP.$('#successTitle', overlay);
+    const subEl = PP.$('#successSub', overlay);
+    if (titleEl) titleEl.textContent = title;
+    if (subEl) subEl.textContent = subtitle || sub || '';
     const metaEl = PP.$('#successMeta', overlay);
-    metaEl.innerHTML = '';
-    
-    const qrUrl = qr_code_url || qrCode;
-    if (qrUrl) {
-      const qrWrap = PP.el('div', {
-        style: 'display:flex;flex-direction:column;align-items:center;margin:0.75rem auto 1rem;padding:0.75rem;background:#ffffff;border-radius:14px;box-shadow:0 8px 24px rgba(0,0,0,0.35);max-width:180px'
-      }, [
-        PP.el('img', {
-          src: qrUrl,
-          alt: 'Transfer Receipt QR',
-          style: 'width:140px;height:140px;display:block;border-radius:8px'
-        }),
-        PP.el('div', {
-          style: 'font-size:0.7rem;font-weight:700;color:#0a0b14;margin-top:4px;text-align:center;letter-spacing:0.02em'
-        }, ['Transfer Receipt QR'])
-      ]);
-      metaEl.appendChild(qrWrap);
+    if (metaEl) {
+      metaEl.innerHTML = '';
+      
+      const qrUrl = qr_code_url || qrCode;
+      if (qrUrl) {
+        const qrWrap = PP.el('div', {
+          style: 'display:flex;flex-direction:column;align-items:center;margin:0.75rem auto 1rem;padding:0.75rem;background:#ffffff;border-radius:14px;box-shadow:0 8px 24px rgba(0,0,0,0.35);max-width:180px'
+        }, [
+          PP.el('img', {
+            src: qrUrl,
+            alt: 'Transfer Receipt QR',
+            style: 'width:140px;height:140px;display:block;border-radius:8px'
+          }),
+          PP.el('div', {
+            style: 'font-size:0.7rem;font-weight:700;color:#0a0b14;margin-top:4px;text-align:center;letter-spacing:0.02em'
+          }, ['Transfer Receipt QR'])
+        ]);
+        metaEl.appendChild(qrWrap);
+      }
+      
+      if (Array.isArray(meta)) {
+        meta.forEach(item => {
+          if (item && item.label) {
+            metaEl.appendChild(PP.el('div', { class: 'success-meta-row' }, [
+              PP.el('div', {}, [String(item.label)]),
+              PP.el('div', {}, [String(item.value ?? '—')])
+            ]));
+          }
+        });
+      } else if (typeof meta === 'object' && meta !== null) {
+        Object.entries(meta).forEach(([k, v]) => {
+          metaEl.appendChild(PP.el('div', { class: 'success-meta-row' }, [
+            PP.el('div', {}, [String(k)]),
+            PP.el('div', {}, [String(v)])
+          ]));
+        });
+      }
     }
-    
-    Object.entries(meta).forEach(([k, v]) => metaEl.appendChild(PP.el('div', { class: 'success-meta-row' }, [
-      PP.el('div', {}, [k]), PP.el('div', {}, [v]),
-    ])));
     overlay.classList.remove('hidden');
     const close = () => {
       overlay.classList.add('hidden');

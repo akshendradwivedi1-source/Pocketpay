@@ -607,13 +607,19 @@ def search_user():
         
     clean_q = query.lower()
     clean_phone = re.sub(r'[\s\-]', '', query)
+    phone_candidates = list({
+        query,
+        clean_phone,
+        '+' + clean_phone if not clean_phone.startswith('+') else clean_phone,
+        clean_phone.lstrip('+'),
+        '+91' + clean_phone.lstrip('+') if len(clean_phone.lstrip('+')) == 10 else clean_phone
+    })
     
     target = User.query.filter(
         (User.email == clean_q) |
         (User.virtual_upi_id == clean_q) |
         (User.virtual_wallet_id == query.upper()) |
-        (User.phone == query) |
-        (User.phone == clean_phone)
+        (User.phone.in_(phone_candidates))
     ).first()
     
     if not target:
@@ -652,7 +658,11 @@ def send_money():
     if not valid:
         return error_response(msg, 400)
         
-    amount = float(data.get('amount', 0))
+    try:
+        amount = round(float(data.get('amount', 0)), 2)
+    except (ValueError, TypeError):
+        return error_response('Invalid transfer amount', 400)
+
     if amount <= 0:
         return error_response('Transfer amount must be positive', 400)
     if amount < 1.0:
@@ -660,13 +670,17 @@ def send_money():
         
     pin = str(data.get('pin', '')).strip()
     if not current_user.transaction_pin_hash:
-        return error_response('Transaction PIN not set. Please set up your PIN first.', 400, code='PIN_NOT_SET')
-        
-    pin_ok, pin_err = current_user.verify_transaction_pin(pin)
-    if not pin_ok:
-        return error_response(pin_err or 'Incorrect PIN', 401, code='INCORRECT_PIN',
-                              pin_attempts=current_user.pin_attempts,
-                              pin_locked_until=current_user.pin_locked_until.isoformat() if current_user.pin_locked_until else None)
+        if pin and pin.isdigit() and len(pin) == 4:
+            current_user.set_transaction_pin(pin)
+            db.session.commit()
+        else:
+            return error_response('Transaction PIN not set. Please enter a 4-digit PIN.', 400, code='PIN_NOT_SET')
+    else:
+        pin_ok, pin_err = current_user.verify_transaction_pin(pin)
+        if not pin_ok:
+            return error_response(pin_err or 'Incorrect PIN', 401, code='INCORRECT_PIN',
+                                  pin_attempts=current_user.pin_attempts,
+                                  pin_locked_until=current_user.pin_locked_until.isoformat() if current_user.pin_locked_until else None)
                               
     # 2FA TOTP verification
     if current_user.totp_enabled:
@@ -679,14 +693,20 @@ def send_money():
     recipient_identifier = str(data.get('recipient', '')).strip()
     clean_q = recipient_identifier.lower()
     clean_phone = re.sub(r'[\s\-]', '', recipient_identifier)
+    phone_candidates = list({
+        recipient_identifier,
+        clean_phone,
+        '+' + clean_phone if not clean_phone.startswith('+') else clean_phone,
+        clean_phone.lstrip('+'),
+        '+91' + clean_phone.lstrip('+') if len(clean_phone.lstrip('+')) == 10 else clean_phone
+    })
     
     recipient = User.query.filter(
         (User.id == (int(recipient_identifier) if recipient_identifier.isdigit() and len(recipient_identifier) < 8 else -1)) |
         (User.email == clean_q) |
         (User.virtual_upi_id == clean_q) |
         (User.virtual_wallet_id == recipient_identifier.upper()) |
-        (User.phone == recipient_identifier) |
-        (User.phone == clean_phone)
+        (User.phone.in_(phone_candidates))
     ).first()
     
     if not recipient:
@@ -695,103 +715,134 @@ def send_money():
     if recipient.id == current_user.id:
         return error_response('Cannot send money to your own account', 400)
         
-    pocket_id = data.get('pocket_id')
+    pocket_raw = data.get('pocket_id')
+    pocket_id = None
+    if pocket_raw is not None and str(pocket_raw).strip() != '' and str(pocket_raw).lower() != 'wallet':
+        try:
+            pocket_id = int(pocket_raw)
+        except (ValueError, TypeError):
+            pocket_id = None
+
     note = str(data.get('note', '')).strip() or f'Transfer to {recipient.full_name}'
     
-    # Source funds deduction
-    source_pocket = None
-    if pocket_id:
-        source_pocket = Pocket.query.filter_by(id=pocket_id, user_id=current_user.id, archived=False).first()
-        if not source_pocket:
-            return error_response('Selected funding pocket not found', 404)
-        if source_pocket.current_balance < amount:
-            return error_response(f'Insufficient balance in {source_pocket.name} (Balance: ₹{source_pocket.current_balance:,.2f})', 400,
-                                  code='INSUFFICIENT_POCKET_BALANCE')
-        source_pocket.deduct_money(amount)
-    else:
-        if (current_user.wallet_balance or 0.0) < amount:
-            return error_response(f'Insufficient available wallet balance (Available: ₹{current_user.wallet_balance:,.2f})', 400,
-                                  code='INSUFFICIENT_BALANCE')
-        current_user.wallet_balance = round(current_user.wallet_balance - amount, 2)
+    try:
+        # Source funds deduction
+        source_pocket = None
+        if pocket_id:
+            source_pocket = Pocket.query.filter_by(id=pocket_id, user_id=current_user.id, archived=False).first()
+            if not source_pocket:
+                return error_response('Selected funding pocket not found', 404)
+            if source_pocket.current_balance < amount:
+                return error_response(f'Insufficient balance in {source_pocket.name} (Balance: ₹{source_pocket.current_balance:,.2f})', 400,
+                                      code='INSUFFICIENT_POCKET_BALANCE')
+            source_pocket.deduct_money(amount)
+        else:
+            if (current_user.wallet_balance or 0.0) < amount:
+                return error_response(f'Insufficient available wallet balance (Available: ₹{current_user.wallet_balance:,.2f})', 400,
+                                      code='INSUFFICIENT_BALANCE')
+            current_user.wallet_balance = round(current_user.wallet_balance - amount, 2)
+            
+        # Credit recipient wallet
+        recipient.wallet_balance = round((recipient.wallet_balance or 0.0) + amount, 2)
         
-    # Credit recipient wallet
-    recipient.wallet_balance = round((recipient.wallet_balance or 0.0) + amount, 2)
-    
-    # Outgoing transaction for sender
-    tx_sender = Transaction(
-        transaction_id=Transaction.generate_transaction_id(),
-        user_id=current_user.id,
-        type='peer_send',
-        amount=amount,
-        from_pocket_id=source_pocket.id if source_pocket else None,
-        category='Transfer to Friend',
-        merchant=recipient.full_name,
-        description=note,
-        payment_method='pocketpay_p2p',
-        extra_data={
-            'peer_user_id': recipient.id,
-            'peer_name': recipient.full_name,
-            'peer_upi': recipient.virtual_upi_id,
-            'is_p2p': True
-        }
-    )
-    tx_sender.qr_code_url = generate_qr_code(build_qr_tx_url(tx_sender), 250)
-    db.session.add(tx_sender)
-    tx_sender.complete()
-    
-    # Incoming transaction for recipient
-    tx_recipient = Transaction(
-        transaction_id=Transaction.generate_transaction_id(),
-        user_id=recipient.id,
-        type='peer_receive',
-        amount=amount,
-        category='Received from Friend',
-        merchant=current_user.full_name,
-        description=note,
-        payment_method='pocketpay_p2p',
-        extra_data={
-            'peer_user_id': current_user.id,
-            'peer_name': current_user.full_name,
-            'peer_upi': current_user.virtual_upi_id,
-            'is_p2p': True
-        }
-    )
-    tx_recipient.qr_code_url = generate_qr_code(build_qr_tx_url(tx_recipient), 250)
-    db.session.add(tx_recipient)
-    tx_recipient.complete()
-    
-    # Notifications
-    Notification.transaction_alert(current_user.id, tx_sender)
-    Notification.create(
-        current_user.id,
-        'Money Sent',
-        f'₹{amount:,.2f} sent to {recipient.full_name} ({recipient.virtual_upi_id or recipient.email}).',
-        'success',
-        'high'
-    )
-    
-    Notification.transaction_alert(recipient.id, tx_recipient)
-    Notification.create(
-        recipient.id,
-        'Money Received! 💰',
-        f'You received ₹{amount:,.2f} from {current_user.full_name} ({current_user.virtual_upi_id or current_user.email}).',
-        'success',
-        'high'
-    )
-    
-    db.session.commit()
-    
-    return json_response({
-        'transaction': tx_sender.to_dict(True),
-        'recipient': {
-            'id': recipient.id,
-            'full_name': recipient.full_name,
-            'virtual_upi_id': recipient.virtual_upi_id
-        },
-        'wallet_balance': current_user.wallet_balance,
-        'pocket_balance': source_pocket.current_balance if source_pocket else None,
-        'receipt_qr': tx_sender.qr_code_url
-    }, f'₹{amount:,.2f} sent successfully to {recipient.full_name}', 201)
+        # Outgoing transaction for sender
+        tx_sender = Transaction(
+            transaction_id=Transaction.generate_transaction_id(),
+            user_id=current_user.id,
+            type='peer_send',
+            amount=amount,
+            from_pocket_id=source_pocket.id if source_pocket else None,
+            category='Transfer to Friend',
+            merchant=recipient.full_name,
+            description=note,
+            payment_method='pocketpay_p2p',
+            extra_data={
+                'peer_user_id': recipient.id,
+                'peer_name': recipient.full_name,
+                'peer_upi': recipient.virtual_upi_id,
+                'is_p2p': True
+            }
+        )
+        tx_sender.qr_code_url = generate_qr_code(build_qr_tx_url(tx_sender), 250)
+        db.session.add(tx_sender)
+        tx_sender.complete()
+        
+        # Incoming transaction for recipient
+        tx_recipient = Transaction(
+            transaction_id=Transaction.generate_transaction_id(),
+            user_id=recipient.id,
+            type='peer_receive',
+            amount=amount,
+            category='Received from Friend',
+            merchant=current_user.full_name,
+            description=note,
+            payment_method='pocketpay_p2p',
+            extra_data={
+                'peer_user_id': current_user.id,
+                'peer_name': current_user.full_name,
+                'peer_upi': current_user.virtual_upi_id,
+                'is_p2p': True
+            }
+        )
+        tx_recipient.qr_code_url = generate_qr_code(build_qr_tx_url(tx_recipient), 250)
+        db.session.add(tx_recipient)
+        tx_recipient.complete()
+        
+        # Notifications
+        Notification.transaction_alert(current_user.id, tx_sender)
+        Notification.create(
+            current_user.id,
+            'Money Sent',
+            f'₹{amount:,.2f} sent to {recipient.full_name} ({recipient.virtual_upi_id or recipient.email}).',
+            'success',
+            'high'
+        )
+        
+        Notification.transaction_alert(recipient.id, tx_recipient)
+        Notification.create(
+            recipient.id,
+            'Money Received! 💰',
+            f'You received ₹{amount:,.2f} from {current_user.full_name} ({current_user.virtual_upi_id or current_user.email}).',
+            'success',
+            'high'
+        )
+        
+        db.session.commit()
+
+        # Instant Telegram notification dispatch (non-blocking / safe)
+        try:
+            from app.telegram.service import TelegramService
+            if TelegramService.is_configured():
+                TelegramService.send_event_notification(
+                    recipient,
+                    "Money Received! 💰",
+                    f"You received <b>₹{amount:,.2f}</b> from <b>{current_user.full_name}</b> ({current_user.virtual_upi_id or current_user.email}).\n\n<i>Note: {note}</i>",
+                    "success"
+                )
+                TelegramService.send_event_notification(
+                    current_user,
+                    "Money Sent 💸",
+                    f"You successfully sent <b>₹{amount:,.2f}</b> to <b>{recipient.full_name}</b> ({recipient.virtual_upi_id or recipient.email}).",
+                    "info"
+                )
+        except Exception:
+            pass
+        
+        return json_response({
+            'transaction': tx_sender.to_dict(True),
+            'recipient': {
+                'id': recipient.id,
+                'full_name': recipient.full_name,
+                'virtual_upi_id': recipient.virtual_upi_id
+            },
+            'wallet_balance': current_user.wallet_balance,
+            'pocket_balance': source_pocket.current_balance if source_pocket else None,
+            'receipt_qr': tx_sender.qr_code_url
+        }, f'₹{amount:,.2f} sent successfully to {recipient.full_name}', 201)
+
+    except Exception as e:
+        db.session.rollback()
+        return error_response(f'Transfer failed: {str(e)}', 500)
 
 
 @bp.route('/request-money', methods=['POST'])

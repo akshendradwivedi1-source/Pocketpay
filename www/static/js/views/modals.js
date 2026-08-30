@@ -2881,6 +2881,26 @@ PP.Modals = {
   },
 
   // =========================================================================
+  // PIN & SECURITY HELPERS
+  // =========================================================================
+  setPin(opts = {}) {
+    return this.setupPin(opts);
+  },
+
+  async promptPin(opts = {}) {
+    const auth = await PP.UI.pinPrompt({
+      title: opts.title || 'Enter Transaction PIN',
+      subtitle: opts.subtitle || (opts.amount ? `Authorizing ₹${Number(opts.amount).toLocaleString('en-IN', {minimumFractionDigits:2})}` : 'Enter your 4-digit PIN')
+    });
+    if (auth && typeof opts.onConfirm === 'function') {
+      opts.onConfirm(auth);
+    } else if (!auth && typeof opts.onCancel === 'function') {
+      opts.onCancel();
+    }
+    return auth;
+  },
+
+  // =========================================================================
   // PEER-TO-PEER (P2P): SEND MONEY MODAL
   // =========================================================================
   async sendMoney(opts = {}) {
@@ -2903,6 +2923,7 @@ PP.Modals = {
     let amountVal = opts.amount ? Number(opts.amount) : 0;
     let selectedSource = 'wallet'; // 'wallet' or pocketId
     let noteVal = opts.note || '';
+    let isSubmitting = false;
 
     const body = PP.el('div', { style: 'display:flex;flex-direction:column;gap:1.25rem' });
 
@@ -3073,11 +3094,17 @@ PP.Modals = {
     const submitBtn = PP.el('button', {
       class: 'btn btn-primary',
       onclick: async () => {
-        if (!recipientInput.trim()) {
+        if (isSubmitting) return;
+
+        const targetIdent = recipientInput.trim();
+        if (!targetIdent) {
           return PP.UI.toast('Recipient Required', 'Please enter a recipient email, phone, or UPI ID', 'warning');
         }
         if (!amountVal || amountVal <= 0) {
-          return PP.UI.toast('Invalid Amount', 'Please enter an amount greater than ₹0', 'warning');
+          return PP.UI.toast('Invalid Amount', 'Please enter an amount greater than ₹0 (minimum ₹1.00)', 'warning');
+        }
+        if (amountVal < 1.0) {
+          return PP.UI.toast('Minimum Amount', 'Minimum transfer amount is ₹1.00', 'warning');
         }
 
         // Check balance before asking for PIN
@@ -3090,51 +3117,64 @@ PP.Modals = {
           return PP.UI.toast('Insufficient Balance', `You only have ₹${available.toLocaleString('en-IN', {minimumFractionDigits:2})} in selected source`, 'error');
         }
 
-        // Prompt PIN & optional TOTP
-        PP.Modals.promptPin({
+        // Check if user has transaction PIN configured
+        const hasPin = Boolean(user.has_transaction_pin || user.has_pin || user.transaction_pin_hash);
+        if (!hasPin) {
+          PP.UI.toast('PIN Required', 'Please configure your 4-digit transaction PIN first', 'info');
+          return PP.Modals.setupPin();
+        }
+
+        // Prompt PIN & optional TOTP via robust PP.UI.pinPrompt
+        const auth = await PP.UI.pinPrompt({
           title: 'Confirm Payment',
-          subtitle: `Authorizing ₹${amountVal.toLocaleString('en-IN', {minimumFractionDigits:2})} to ${resolvedUser?.full_name || recipientInput}`,
-          amount: amountVal,
-          requireTotp: !!user.totp_enabled,
-          onConfirm: async (authPayload) => {
-            submitBtn.disabled = true;
-            submitBtn.innerHTML = '<i data-lucide="loader-2" style="animation:slowSpin 1s linear infinite"></i> Processing Transfer…';
-            PP.refreshIcons();
-            try {
-              const res = await PP.WalletAPI.sendMoney({
-                recipient: recipientInput.trim(),
-                amount: amountVal,
-                pocket_id: selectedSource === 'wallet' ? null : parseInt(selectedSource),
-                note: noteVal,
-                pin: authPayload.pin,
-                totp_code: authPayload.totp_code
-              });
-
-              modal.close();
-              await PP.loadState?.();
-              PP.renderView?.();
-
-              PP.UI.showSuccess({
-                title: 'Money Sent Successfully!',
-                sub: `₹${amountVal.toLocaleString('en-IN', {minimumFractionDigits:2})} transferred to ${res.data?.recipient?.full_name || recipientInput}`,
-                meta: [
-                  { label: 'Recipient', value: res.data?.recipient?.full_name || recipientInput },
-                  { label: 'Amount', value: `₹${amountVal.toLocaleString('en-IN', {minimumFractionDigits:2})}` },
-                  { label: 'Transaction ID', value: res.data?.transaction?.transaction_id || '—' },
-                ]
-              });
-
-              if (res.data?.transaction) {
-                setTimeout(() => PP.Modals.transactionDetail?.(res.data.transaction), 2400);
-              }
-            } catch (err) {
-              PP.UI.toast('Transfer Failed', err.message || 'Payment could not be processed', 'error');
-              submitBtn.disabled = false;
-              submitBtn.innerHTML = '<i data-lucide="send"></i> Send Money';
-              PP.refreshIcons();
-            }
-          }
+          subtitle: `Authorizing ₹${amountVal.toLocaleString('en-IN', {minimumFractionDigits:2})} to ${resolvedUser?.full_name || targetIdent}`
         });
+        if (!auth) return; // User cancelled or exited
+
+        const pinStr = typeof auth === 'object' && auth !== null ? auth.pin : String(auth);
+        const totpCode = typeof auth === 'object' && auth !== null ? auth.totp_code : null;
+
+        isSubmitting = true;
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<i data-lucide="loader-2" style="animation:slowSpin 1s linear infinite"></i> Processing Transfer…';
+        PP.refreshIcons();
+
+        try {
+          const res = await PP.WalletAPI.sendMoney({
+            recipient: targetIdent,
+            amount: amountVal,
+            pocket_id: selectedSource === 'wallet' ? null : parseInt(selectedSource),
+            note: noteVal,
+            pin: pinStr,
+            totp_code: totpCode
+          });
+
+          modal.close();
+          await PP.loadState?.();
+          PP.renderView?.();
+
+          const recipientDisplay = res.data?.recipient?.full_name || resolvedUser?.full_name || targetIdent;
+          PP.UI.showSuccess({
+            title: 'Money Sent Successfully!',
+            sub: `₹${amountVal.toLocaleString('en-IN', {minimumFractionDigits:2})} transferred to ${recipientDisplay}`,
+            meta: [
+              { label: 'Recipient', value: recipientDisplay },
+              { label: 'Amount', value: `₹${amountVal.toLocaleString('en-IN', {minimumFractionDigits:2})}` },
+              { label: 'Transaction ID', value: res.data?.transaction?.transaction_id || '—' },
+            ]
+          });
+
+          if (res.data?.transaction) {
+            setTimeout(() => PP.Modals.transactionDetail?.(res.data.transaction), 2400);
+          }
+        } catch (err) {
+          PP.UI.toast('Transfer Failed', err.message || 'Payment could not be processed', 'error');
+        } finally {
+          isSubmitting = false;
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = '<i data-lucide="send"></i> Send Money';
+          PP.refreshIcons();
+        }
       }
     }, [PP.el('i', { 'data-lucide': 'send' }), 'Send Money']);
     modal.footer.appendChild(submitBtn);
