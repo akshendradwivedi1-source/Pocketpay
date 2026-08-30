@@ -280,8 +280,7 @@ class TelegramHandler:
                 "Your intelligent personal finance and smart pocket assistant on Telegram.\n\n"
                 "To access your account, balance, pockets, and transaction alerts, please connect your PocketPay account."
             )
-            from .keyboards import connect_telegram_keyboard
-            TelegramService.send_message(chat_id, msg, reply_markup=connect_telegram_keyboard())
+            TelegramService.send_message(chat_id, msg, reply_markup=main_menu_keyboard(is_logged_in=False))
 
     @classmethod
     def cmd_help(cls, chat_id: int, session, user: Optional[User]):
@@ -333,6 +332,13 @@ class TelegramHandler:
             "• <b>FAQ:</b> You can ask this bot questions anytime in plain English!"
         )
         TelegramService.send_message(chat_id, support_msg, reply_markup=back_to_menu_keyboard())
+
+    @classmethod
+    def cmd_cancel(cls, chat_id: int, session, user: Optional[User] = None):
+        """Handles /cancel command or cancel_action callback"""
+        session.clear_state()
+        msg = "❌ <b>Operation Cancelled</b>\n\nReturned to main menu."
+        TelegramService.send_message(chat_id, msg, reply_markup=main_menu_keyboard(is_logged_in=bool(user)))
 
     @classmethod
     def prompt_how_to_connect(cls, chat_id: int):
@@ -449,11 +455,11 @@ class TelegramHandler:
     def cmd_unlink(cls, chat_id: int, session):
         """Disconnects Telegram account"""
         SessionManager.unlink_account(session.telegram_id)
-        from .keyboards import connect_telegram_keyboard
+        from .keyboards import main_menu_keyboard
         TelegramService.send_message(
             chat_id,
-            "🚪 <b>Telegram Disconnected!</b>\n\nYour Telegram account has been unlinked from PocketPay.\nYou can reconnect anytime from PocketPay Settings.",
-            reply_markup=connect_telegram_keyboard()
+            "🚪 <b>Logged out successfully!</b>\n\nYour Telegram account has been disconnected and unlinked from PocketPay.\nYou can reconnect anytime from PocketPay Settings or log in with /start.",
+            reply_markup=main_menu_keyboard(is_logged_in=False)
         )
 
 
@@ -591,16 +597,16 @@ class TelegramHandler:
     @classmethod
     def send_auth_required(cls, chat_id: int):
         """Standardized message for unlinked / unauthenticated users"""
-        from .keyboards import connect_telegram_keyboard
+        from .keyboards import main_menu_keyboard
         TelegramService.send_message(
             chat_id,
-            "⚠️ <b>Account Not Linked</b>\n\n"
-            "Please connect your Telegram account from PocketPay Settings before accessing account information.\n\n"
+            "🔒 <b>Authentication Required — Account Not Linked</b>\n\n"
+            "Please connect or log in to your PocketPay account before accessing financial features.\n\n"
             "1. Sign in to PocketPay on your browser\n"
             "2. Go to <b>Settings & Security</b> → <b>Connect Telegram</b>\n"
             "3. Tap the direct link or enter your single-use link code here with:\n"
             "   <code>/link PKP123456</code>",
-            reply_markup=connect_telegram_keyboard()
+            reply_markup=main_menu_keyboard(is_logged_in=False)
         )
 
 

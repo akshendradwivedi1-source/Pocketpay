@@ -8,6 +8,10 @@ def main_menu_keyboard(is_logged_in: bool = False) -> dict:
         return {
             "inline_keyboard": [
                 [
+                    {"text": "🔐 Login", "callback_data": "auth_login"},
+                    {"text": "📝 Create Account", "callback_data": "auth_register"}
+                ],
+                [
                     {"text": "🔗 How to Connect Account", "callback_data": "help_connect"},
                     {"text": "ℹ️ Help & Guide", "callback_data": "help"}
                 ],

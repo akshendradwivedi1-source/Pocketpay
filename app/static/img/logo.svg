@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <!-- Background Gradient -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0F172A"/>
+      <stop offset="50%" stop-color="#0B0F19"/>
+      <stop offset="100%" stop-color="#18132A"/>
+    </linearGradient>
+
+    <!-- Border Glow Gradient -->
+    <linearGradient id="borderGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6366F1" stop-opacity="0.8"/>
+      <stop offset="50%" stop-color="#06B6D4" stop-opacity="0.4"/>
+      <stop offset="100%" stop-color="#EC4899" stop-opacity="0.8"/>
+    </linearGradient>
+
+    <!-- Spine Gradient (Indigo to Cyan) -->
+    <linearGradient id="spineGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#818CF8"/>
+      <stop offset="60%" stop-color="#6366F1"/>
+      <stop offset="100%" stop-color="#06B6D4"/>
+    </linearGradient>
+
+    <!-- Loop Gradient (Violet to Pink) -->
+    <linearGradient id="loopGrad" x1="0%" y1="0%" x2="100%" y2="50%">
+      <stop offset="0%" stop-color="#8B5CF6"/>
+      <stop offset="50%" stop-color="#A855F7"/>
+      <stop offset="100%" stop-color="#EC4899"/>
+    </linearGradient>
+
+    <!-- Payment Pulse Accent (Cyan to White) -->
+    <linearGradient id="pulseGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#FFFFFF"/>
+    </linearGradient>
+
+    <!-- Drop Shadow Filter -->
+    <filter id="logoGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="16" flood-color="#6366F1" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+
+  <!-- Base Squircle -->
+  <rect x="24" y="24" width="464" height="464" rx="112" fill="url(#bgGrad)"/>
+  <rect x="24" y="24" width="464" height="464" rx="112" stroke="url(#borderGrad)" stroke-width="5"/>
+
+  <!-- Logo Group with Glow -->
+  <g filter="url(#logoGlow)">
+    <!-- Vertical Spine (P Left) -->
+    <rect x="144" y="128" width="56" height="256" rx="28" fill="url(#spineGrad)"/>
+
+    <!-- P Loop / Pocket Header -->
+    <path d="M172 128H304C348.183 128 384 163.817 384 208C384 252.183 348.183 288 304 288H172V236H304C319.464 236 332 223.464 332 208C332 192.536 319.464 180 304 180H172V128Z" fill="url(#loopGrad)"/>
+
+    <!-- Geometric Pocket Payment Fold / Dynamic Chevron -->
+    <polygon points="228,248 328,248 272,336 210,336" fill="url(#pulseGrad)"/>
+  </g>
+</svg>

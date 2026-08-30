@@ -3,7 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <title>Pay {{ recipient_name }} — PocketPay</title>
+  <title>Pay via PocketPay — {{ recipient_name }}</title>
+  <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon-32x32.png" />
+  <link rel="icon" type="image/png" sizes="16x16" href="/static/img/favicon-16x16.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/img/apple-touch-icon.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Space+Grotesk:wght@600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet" />
@@ -25,7 +29,7 @@
     .pay-card {
       width: 100%;
       max-width: 440px;
-      background: rgba(18, 20, 36, 0.9);
+      background: rgba(18, 20, 36, 0.92);
       backdrop-filter: blur(24px);
       -webkit-backdrop-filter: blur(24px);
       border: 1px solid rgba(255, 255, 255, 0.12);
@@ -44,14 +48,13 @@
     .brand-logo {
       width: 32px;
       height: 32px;
-      border-radius: 10px;
-      background: linear-gradient(135deg, #6366f1, #ec4899);
       display: flex;
       align-items: center;
       justify-content: center;
-      color: white;
-      font-weight: 900;
-      font-size: 1rem;
+    }
+    .brand-logo svg {
+      width: 32px;
+      height: 32px;
     }
     .brand-name {
       font-size: 1.1rem;
@@ -157,7 +160,19 @@
 <body>
   <div class="pay-card">
     <div class="brand-header">
-      <div class="brand-logo">P</div>
+      <div class="brand-logo">
+        <svg viewBox="0 0 32 32" fill="none">
+          <defs>
+            <linearGradient id="payBg" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse"><stop stop-color="#0F172A"/><stop offset="1" stop-color="#18132A"/></linearGradient>
+            <linearGradient id="paySpine" x1="0" y1="0" x2="0" y2="32"><stop stop-color="#818CF8"/><stop offset="0.6" stop-color="#6366F1"/><stop offset="1" stop-color="#06B6D4"/></linearGradient>
+            <linearGradient id="payLoop" x1="0" y1="0" x2="32" y2="16"><stop stop-color="#8B5CF6"/><stop offset="1" stop-color="#EC4899"/></linearGradient>
+          </defs>
+          <rect width="32" height="32" rx="9" fill="url(#payBg)" stroke="#6366F1" stroke-width="1" stroke-opacity="0.5"/>
+          <rect x="9" y="8" width="3.6" height="16" rx="1.8" fill="url(#paySpine)"/>
+          <path d="M10.8 8H19C21.76 8 24 10.24 24 13C24 15.76 21.76 18 19 18H10.8V14.6H19C19.88 14.6 20.6 13.88 20.6 13C20.6 12.12 19.88 11.4 19 11.4H10.8V8Z" fill="url(#payLoop)"/>
+          <polygon points="14,15.5 20.8,15.5 17,21 13,21" fill="#38BDF8"/>
+        </svg>
+      </div>
       <div class="brand-name">Pocket<span style="color:#6366f1">Pay</span></div>
     </div>
 

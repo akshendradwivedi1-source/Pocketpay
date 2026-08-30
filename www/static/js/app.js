@@ -276,7 +276,27 @@ PP.renderAuth = (container) => {
     <div class="auth-brand">
       <div class="auth-brand-logo">
         <div class="logo-mark">
-          <svg viewBox="0 0 32 32" fill="none"><defs><linearGradient id="ag" x1="0" y1="0" x2="32" y2="32"><stop stop-color="#6366f1"/><stop offset="1" stop-color="#ec4899"/></linearGradient></defs><rect width="32" height="32" rx="9" fill="url(#ag)"/><path d="M9 20L14 15L17 18L23 11" stroke="white" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <svg viewBox="0 0 32 32" fill="none">
+            <defs>
+              <linearGradient id="agBg" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#0F172A"/>
+                <stop offset="1" stop-color="#18132A"/>
+              </linearGradient>
+              <linearGradient id="agSpine" x1="0" y1="0" x2="0" y2="32">
+                <stop stop-color="#818CF8"/>
+                <stop offset="0.6" stop-color="#6366F1"/>
+                <stop offset="1" stop-color="#06B6D4"/>
+              </linearGradient>
+              <linearGradient id="agLoop" x1="0" y1="0" x2="32" y2="16">
+                <stop stop-color="#8B5CF6"/>
+                <stop offset="1" stop-color="#EC4899"/>
+              </linearGradient>
+            </defs>
+            <rect width="32" height="32" rx="9" fill="url(#agBg)" stroke="#6366F1" stroke-width="1" stroke-opacity="0.5"/>
+            <rect x="9" y="8" width="3.6" height="16" rx="1.8" fill="url(#agSpine)"/>
+            <path d="M10.8 8H19C21.76 8 24 10.24 24 13C24 15.76 21.76 18 19 18H10.8V14.6H19C19.88 14.6 20.6 13.88 20.6 13C20.6 12.12 19.88 11.4 19 11.4H10.8V8Z" fill="url(#agLoop)"/>
+            <polygon points="14,15.5 20.8,15.5 17,21 13,21" fill="#38BDF8"/>
+          </svg>
         </div>
         <div><h1>PocketPay</h1><p>Smart Pocket System</p></div>
       </div>

@@ -10,7 +10,14 @@ def index():
 
 @bp.route('/favicon.ico')
 def favicon():
-    return Response(status=204, mimetype='image/x-icon')
+    import os
+    from flask import current_app, send_from_directory
+    return send_from_directory(
+        os.path.join(current_app.root_path, 'static', 'img'),
+        'favicon.ico',
+        mimetype='image/vnd.microsoft.icon',
+        max_age=86400
+    )
 
 
 @bp.route('/health', methods=['GET'])

@@ -123,6 +123,19 @@ PP.Auth = {
   async walletQr() {
     return PP.API.get('/auth/wallet-qr');
   },
+  async telegramStatus() {
+    return PP.API.get('/auth/telegram/status');
+  },
+  async telegramGenerateLinkToken() {
+    return PP.API.post('/auth/telegram/generate-link-token');
+  },
+  async telegramToggleNotifications() {
+    return PP.API.post('/auth/telegram/toggle-notifications');
+  },
+  async telegramDisconnect() {
+    return PP.API.post('/auth/telegram/disconnect');
+  },
+
 
   renderOtpVerification(userEmail) {
     const wrap = PP.$('#authFormWrapper');
@@ -334,6 +347,183 @@ PP.Auth = {
       },
     });
 
+  attachPasswordToggles(container) {
+    container.querySelectorAll('.pwd-toggle-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const wrap = btn.closest('.password-field-wrap');
+        const input = wrap?.querySelector('input');
+        if (!input) return;
+        const isPwd = input.type === 'password';
+        input.type = isPwd ? 'text' : 'password';
+        btn.innerHTML = `<i data-lucide="${isPwd ? 'eye-off' : 'eye'}" style="width:18px;height:18px"></i>`;
+        PP.refreshIcons();
+      });
+    });
+  },
+
+  showForgotPasswordModal(initialEmail = '') {
+    const modal = PP.UI.modal({
+      title: 'Reset Account Password',
+      subtitle: 'Verify with 6-digit OTP and choose a new password',
+      icon: 'key-round',
+      iconClass: 'bg-accent',
+      size: 'md'
+    });
+
+    modal.body.innerHTML = `
+      <form id="forgotPasswordForm" style="display:flex;flex-direction:column;gap:1rem">
+        <div id="fpStep1">
+          <p style="font-size:0.88rem;color:var(--text-muted);margin-bottom:0.75rem">
+            Enter the email address associated with your PocketPay account. We will send you a 6-digit verification code.
+          </p>
+          <div class="form-group">
+            <label class="form-label">Email Address *</label>
+            <input class="form-input" id="fpEmail" type="email" value="${initialEmail}" placeholder="you@example.com" required />
+          </div>
+          <button type="button" class="btn btn-primary btn-block" id="fpSendOtpBtn" style="margin-top:0.5rem">
+            Send Reset OTP
+          </button>
+        </div>
+
+        <div id="fpStep2" style="display:none;flex-direction:column;gap:1rem">
+          <div style="background:rgba(99,102,241,0.1);border:1px solid rgba(99,102,241,0.2);padding:10px 14px;border-radius:10px;font-size:0.85rem">
+            <i data-lucide="mail" style="width:15px;height:15px;display:inline-block;vertical-align:middle;margin-right:4px;color:var(--accent)"></i>
+            OTP dispatched! Please check your inbox for <b id="fpTargetEmail"></b>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">6-digit Verification Code *</label>
+            <input class="form-input text-center mono" id="fpOtp" type="text" maxlength="6" placeholder="000000" style="font-size:1.4rem;letter-spacing:4px;font-weight:700" required />
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">New Password (min 8 chars) *</label>
+            <div class="password-field-wrap">
+              <input class="form-input" id="fpNewPassword" type="password" minlength="8" placeholder="••••••••" required />
+              <button type="button" class="pwd-toggle-btn" title="Toggle password visibility"><i data-lucide="eye" style="width:18px;height:18px"></i></button>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Confirm New Password *</label>
+            <div class="password-field-wrap">
+              <input class="form-input" id="fpConfirmPassword" type="password" minlength="8" placeholder="••••••••" required />
+              <button type="button" class="pwd-toggle-btn" title="Toggle password visibility"><i data-lucide="eye" style="width:18px;height:18px"></i></button>
+            </div>
+          </div>
+
+          <button type="submit" class="btn btn-primary btn-block" id="fpSubmitBtn" style="margin-top:0.5rem">
+            Save New Password & Continue
+          </button>
+        </div>
+      </form>
+    `;
+
+    PP.refreshIcons();
+    PP.Auth.attachPasswordToggles(modal.body);
+
+    const step1 = modal.body.querySelector('#fpStep1');
+    const step2 = modal.body.querySelector('#fpStep2');
+    const emailInp = modal.body.querySelector('#fpEmail');
+    const sendBtn = modal.body.querySelector('#fpSendOtpBtn');
+    const form = modal.body.querySelector('#forgotPasswordForm');
+
+    sendBtn.addEventListener('click', async () => {
+      const email = emailInp.value.trim().toLowerCase();
+      if (!email) return PP.UI.toast('Email Required', 'Please enter your email address', 'warning');
+      sendBtn.disabled = true;
+      sendBtn.innerHTML = '<i data-lucide="loader-2" style="animation:slowSpin 1s linear infinite"></i> Sending OTP…';
+      PP.refreshIcons();
+      try {
+        await PP.Auth.forgotPassword(email);
+        modal.body.querySelector('#fpTargetEmail').textContent = email;
+        step1.style.display = 'none';
+        step2.style.display = 'flex';
+        PP.UI.toast('OTP Sent', `If an account exists, a reset code was sent to ${email}`, 'info');
+        PP.refreshIcons();
+      } catch (err) {
+        PP.UI.toast('Request Failed', err.message || 'Failed to send reset code', 'error');
+        sendBtn.disabled = false;
+        sendBtn.innerHTML = 'Send Reset OTP';
+      }
+    });
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const email = emailInp.value.trim().toLowerCase();
+      const otp = modal.body.querySelector('#fpOtp').value.trim();
+      const newPwd = modal.body.querySelector('#fpNewPassword').value;
+      const confirmPwd = modal.body.querySelector('#fpConfirmPassword').value;
+
+      if (!otp || otp.length !== 6) {
+        return PP.UI.toast('Invalid OTP', 'Please enter the 6-digit verification code', 'warning');
+      }
+      if (!newPwd || newPwd.length < 8) {
+        return PP.UI.toast('Weak Password', 'New password must be at least 8 characters', 'warning');
+      }
+      if (newPwd !== confirmPwd) {
+        return PP.UI.toast('Password Mismatch', 'Passwords do not match. Please re-enter.', 'warning');
+      }
+
+      const submitBtn = modal.body.querySelector('#fpSubmitBtn');
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = '<i data-lucide="loader-2" style="animation:slowSpin 1s linear infinite"></i> Resetting Password…';
+      PP.refreshIcons();
+
+      try {
+        await PP.Auth.resetPassword(email, otp, newPwd);
+        modal.close();
+        PP.UI.toast('Password Reset', 'Password changed successfully. Please sign in.', 'success');
+        PP.Auth.renderLoginForm();
+      } catch (err) {
+        PP.UI.toast('Reset Failed', err.message || 'Invalid or expired OTP', 'error');
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = 'Save New Password & Continue';
+      }
+    });
+  },
+
+  renderLoginForm() {
+    const wrap = PP.$('#authFormWrapper');
+    if (!wrap) return;
+    wrap.innerHTML = '';
+    
+    // Update active tab buttons if present
+    const tabLogin = PP.$('#tabLogin');
+    const tabReg = PP.$('#tabRegister');
+    if (tabLogin) tabLogin.classList.add('active');
+    if (tabReg) tabReg.classList.remove('active');
+
+    const form = PP.el('form', {
+      class: 'auth-form',
+      onsubmit: async (e) => {
+        e.preventDefault();
+        const btn = PP.$('.auth-submit', form);
+        btn.disabled = true; btn.innerHTML = '<i data-lucide="loader-2" style="animation:slowSpin 1s linear infinite"></i> Signing In…';
+        PP.refreshIcons();
+        try {
+          const fd = new FormData(form);
+          const payload = Object.fromEntries(fd.entries());
+          const res = await PP.Auth.login(payload.email, payload.password, payload.remember === 'on');
+          PP.UI.toast('Welcome back!', res.message || '', 'success');
+          PP.state.user = res?.data?.user || null;
+          
+          if (res?.data?.needs_email_verification) {
+            PP.UI.toast('Email Unverified', 'Please complete email verification', 'warning');
+            PP.Auth.renderOtpVerification(payload.email);
+          } else {
+            setTimeout(() => { PP.bootstrap(true); }, 350);
+          }
+        } catch (err) {
+          PP.UI.toast('Sign In Failed', err.message || 'Invalid email or password', 'error');
+        } finally {
+          btn.disabled = false;
+          btn.innerHTML = 'Sign In';
+        }
+      },
+    });
+
     form.innerHTML = `
       <h2 class="auth-title">Sign in to PocketPay</h2>
       <p class="auth-subtitle">Welcome back. Enter your credentials to access your pockets.</p>
@@ -345,7 +535,10 @@ PP.Auth = {
 
       <div class="form-group">
         <label class="form-label">Password *</label>
-        <input class="form-input" name="password" type="password" placeholder="••••••••" required minlength="8" />
+        <div class="password-field-wrap">
+          <input class="form-input" name="password" type="password" placeholder="••••••••" required minlength="8" />
+          <button type="button" class="pwd-toggle-btn" title="Toggle password visibility"><i data-lucide="eye" style="width:18px;height:18px"></i></button>
+        </div>
       </div>
 
       <label class="checkbox-row">
@@ -370,23 +563,15 @@ PP.Auth = {
 
     wrap.appendChild(form);
     PP.refreshIcons();
+    PP.Auth.attachPasswordToggles(form);
 
     PP.$('#goRegister')?.addEventListener('click', () => {
       PP.Auth.renderRegisterForm();
     });
 
-    PP.$('#forgotBtn')?.addEventListener('click', async () => {
-      const email = await PP.UI.prompt('Password Reset', 'Enter your account email address', { type: 'email', placeholder: 'you@example.com' });
-      if (!email) return;
-      try {
-        await PP.Auth.forgotPassword(email);
-        const otp = await PP.UI.prompt('Enter OTP', `We sent a 6-digit verification code to ${email}`, { type: 'text', placeholder: '6-digit OTP' });
-        if (!otp) return;
-        const pwd = await PP.UI.prompt('New Password', 'Enter a new password (min 8 chars)', { type: 'password', placeholder: '••••••••' });
-        if (!pwd) return;
-        await PP.Auth.resetPassword(email, otp, pwd);
-        PP.UI.toast('Password Reset', 'Password changed successfully. You can now sign in.', 'success');
-      } catch (e) { PP.UI.toast('Reset failed', e.message, 'error'); }
+    PP.$('#forgotBtn')?.addEventListener('click', () => {
+      const emailVal = PP.$('input[name="email"]', form)?.value?.trim() || '';
+      PP.Auth.showForgotPasswordModal(emailVal);
     });
   },
 
@@ -451,12 +636,18 @@ PP.Auth = {
 
       <div class="form-group">
         <label class="form-label">Password *</label>
-        <input class="form-input" name="password" type="password" placeholder="••••••••" required minlength="8" />
+        <div class="password-field-wrap">
+          <input class="form-input" name="password" type="password" placeholder="••••••••" required minlength="8" />
+          <button type="button" class="pwd-toggle-btn" title="Toggle password visibility"><i data-lucide="eye" style="width:18px;height:18px"></i></button>
+        </div>
       </div>
 
       <div class="form-group">
         <label class="form-label">Confirm Password *</label>
-        <input class="form-input" name="password_confirm" type="password" placeholder="••••••••" required minlength="8" />
+        <div class="password-field-wrap">
+          <input class="form-input" name="password_confirm" type="password" placeholder="••••••••" required minlength="8" />
+          <button type="button" class="pwd-toggle-btn" title="Toggle password visibility"><i data-lucide="eye" style="width:18px;height:18px"></i></button>
+        </div>
       </div>
 
       <div class="form-group">
@@ -479,6 +670,7 @@ PP.Auth = {
 
     wrap.appendChild(form);
     PP.refreshIcons();
+    PP.Auth.attachPasswordToggles(form);
 
     PP.$('#goLogin')?.addEventListener('click', () => {
       PP.Auth.renderLoginForm();
@@ -493,6 +685,7 @@ PP.Auth = {
     }
   },
 };
+
 
 // ========== Misc / Summary ==========
 PP.MiscAPI = {
