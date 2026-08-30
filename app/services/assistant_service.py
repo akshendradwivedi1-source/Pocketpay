@@ -706,9 +706,9 @@ class AssistantService:
 
         return {
             'type': 'security_info',
-            'title': '🔐 Account Security & Two-Factor Authentication',
+            'title': '🔐 Multi-Layer Security & Two-Factor Authentication',
             'message': (
-                "PocketPay protects your account with multi-factor security:<br><br>"
+                "PocketPay protects your account with Multi-Layer Security and authentication protocols:<br><br>"
                 + "<br>".join(status_lines) + "<br><br>"
                 "Every financial transaction requires your 4-digit PIN, and Authenticator 2FA protects sensitive withdrawals and profile modifications."
             ),
@@ -721,14 +721,34 @@ class AssistantService:
         }
 
     @classmethod
+    def _handle_create_pocket_guide(cls) -> Dict[str, Any]:
+        return {
+            'type': 'create_pocket_guide',
+            'title': '✨ Creating a Smart Pocket',
+            'message': (
+                "Creating a Smart Pocket is simple:<br><br>"
+                "1. Go to <b>Pockets</b> from the navigation menu.<br>"
+                "2. Tap the <b>+ Create Pocket</b> button.<br>"
+                "3. Enter a name (e.g., 'Groceries', 'Rent', 'Emergency Fund').<br>"
+                "4. Choose an icon, color, and optional monthly target or budget.<br>"
+                "5. Save to start organizing your funds instantly!"
+            ),
+            'actions': [
+                {'label': 'Create New Pocket', 'icon': 'folder-plus', 'action': 'create_pocket'},
+                {'label': 'View All Pockets', 'icon': 'wallet-cards', 'action': 'pockets'}
+            ],
+            'suggested_prompts': ['What is my balance?', 'Show my pockets', 'How does income distribution work?']
+        }
+
+    @classmethod
     def _handle_premium_info(cls, user: Optional[User]) -> Dict[str, Any]:
         is_prem = bool(user.is_premium) if user else False
         return {
             'type': 'premium_info',
-            'title': '⭐ PocketPay Premium',
+            'title': '⭐ PocketPay Premium (PocketPay Pro)',
             'message': (
-                f"<b>Status:</b> {'You are an active Premium member ⭐' if is_prem else 'Free Plan'}<br><br>"
-                "Premium unlocks unlimited smart pockets, advanced category analytics, automated income distribution rules, and priority support desk access."
+                f"<b>Status:</b> {'You are an active PocketPay Pro member ⭐' if is_prem else 'Free Plan'}<br><br>"
+                "PocketPay Pro unlocks unlimited smart pockets, advanced category analytics, automated income distribution rules, and priority support desk access."
             ),
             'actions': [{'label': 'View Premium Features', 'icon': 'sparkles', 'action': 'view_premium'}],
             'suggested_prompts': ['What is my balance?', 'Show my pockets']
