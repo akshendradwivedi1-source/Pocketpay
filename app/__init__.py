@@ -66,29 +66,57 @@ def create_app(config_name=None):
     with app.app_context():
         from sqlalchemy import inspect, text
         db.create_all()
+
+        # 1. Run Alembic migrations automatically on startup
+        try:
+            from flask_migrate import upgrade as flask_migrate_upgrade
+            flask_migrate_upgrade()
+        except Exception as e:
+            app.logger.debug(f"[Alembic Upgrade Info] {e}")
+
+        # 2. Database-agnostic schema sync fallback (guarantees columns exist on PostgreSQL, SQLite, MySQL)
         try:
             inspector = inspect(db.engine)
             tables = inspector.get_table_names()
+            is_postgres = db.engine.dialect.name.lower().startswith('postgres')
+
+            bool_false = "BOOLEAN DEFAULT FALSE" if is_postgres else "BOOLEAN DEFAULT 0"
+            bool_true = "BOOLEAN DEFAULT TRUE" if is_postgres else "BOOLEAN DEFAULT 1"
+            datetime_type = "TIMESTAMP" if is_postgres else "DATETIME"
+
             if 'users' in tables:
                 columns = [c['name'] for c in inspector.get_columns('users')]
-                with db.engine.connect() as conn:
-                    if 'is_admin' not in columns:
-                        conn.execute(text("ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT 0"))
-                    if 'telegram_linking_token' not in columns:
-                        conn.execute(text("ALTER TABLE users ADD COLUMN telegram_linking_token VARCHAR(64)"))
-                    if 'telegram_linking_token_expires_at' not in columns:
-                        conn.execute(text("ALTER TABLE users ADD COLUMN telegram_linking_token_expires_at DATETIME"))
-                    if 'telegram_notifications_enabled' not in columns:
-                        conn.execute(text("ALTER TABLE users ADD COLUMN telegram_notifications_enabled BOOLEAN DEFAULT 1"))
-                    conn.commit()
+                alter_statements = []
+                if 'is_admin' not in columns:
+                    alter_statements.append(f"ALTER TABLE users ADD COLUMN is_admin {bool_false}")
+                if 'telegram_linking_token' not in columns:
+                    alter_statements.append("ALTER TABLE users ADD COLUMN telegram_linking_token VARCHAR(64)")
+                if 'telegram_linking_token_expires_at' not in columns:
+                    alter_statements.append(f"ALTER TABLE users ADD COLUMN telegram_linking_token_expires_at {datetime_type}")
+                if 'telegram_notifications_enabled' not in columns:
+                    alter_statements.append(f"ALTER TABLE users ADD COLUMN telegram_notifications_enabled {bool_true}")
+                if 'otp_approval_token' not in columns:
+                    alter_statements.append("ALTER TABLE users ADD COLUMN otp_approval_token VARCHAR(128)")
+                if 'otp_approval_status' not in columns:
+                    alter_statements.append("ALTER TABLE users ADD COLUMN otp_approval_status VARCHAR(32) DEFAULT 'none'")
+
+                for stmt in alter_statements:
+                    try:
+                        with db.engine.begin() as conn:
+                            conn.execute(text(stmt))
+                    except Exception as col_err:
+                        app.logger.debug(f"[Schema Sync] Notice on '{stmt}': {col_err}")
+
             if 'telegram_users' in tables:
                 tg_columns = [c['name'] for c in inspector.get_columns('telegram_users')]
-                with db.engine.connect() as conn:
-                    if 'notifications_enabled' not in tg_columns:
-                        conn.execute(text("ALTER TABLE telegram_users ADD COLUMN notifications_enabled BOOLEAN DEFAULT 1"))
-                    conn.commit()
-        except Exception:
-            pass
+                if 'notifications_enabled' not in tg_columns:
+                    try:
+                        with db.engine.begin() as conn:
+                            conn.execute(text(f"ALTER TABLE telegram_users ADD COLUMN notifications_enabled {bool_true}"))
+                    except Exception:
+                        pass
+        except Exception as e:
+            app.logger.debug(f"[Schema Sync Exception] {e}")
 
         if config_name != 'testing':
             from app.seeds import seed_database_if_empty
