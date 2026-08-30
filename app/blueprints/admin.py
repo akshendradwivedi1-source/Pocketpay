@@ -469,7 +469,13 @@ def api_toggle_user_premium(user_id):
 @bp.route('/api/users/<int:user_id>/delete', methods=['DELETE', 'POST'])
 @api_admin_required
 def api_delete_user(user_id):
-    """Deletes or deactivates a user account completely"""
+    """
+    Administrative account deletion/closure with audit logging.
+    - Soft-deletes user record and frees up email/phone for re-registration
+    - Preserves historical transaction ledger for audit and compliance
+    - Archives pockets and disconnects auxiliary integrations
+    - Records administrative action in AdminAuditLog
+    """
     user = db.session.get(User, user_id)
     if not user:
         return error_response('User not found', 404)
@@ -479,18 +485,60 @@ def api_delete_user(user_id):
 
     email = user.email
     full_name = user.full_name
-    db.session.delete(user)
-    db.session.commit()
 
-    AdminAuditLog.record(
-        admin_email=current_user.email,
-        action='delete_user',
-        target_type='user',
-        target_id=str(user_id),
-        details={'user_email': email, 'full_name': full_name}
-    )
+    try:
+        # 1. Archive pockets
+        Pocket.query.filter_by(user_id=user_id).update({'archived': True})
 
-    return json_response({'id': user_id}, f"User {full_name} ({email}) deleted successfully.")
+        # 2. Disconnect Telegram user link
+        from app.models.telegram_user import TelegramUser
+        TelegramUser.query.filter_by(user_id=user_id).delete()
+
+        # 3. Clean up money requests
+        from app.models.money_request import MoneyRequest
+        MoneyRequest.query.filter(
+            (MoneyRequest.requester_id == user_id) | (MoneyRequest.target_user_id == user_id)
+        ).delete()
+
+        # 4. Clean up auxiliary entities
+        from app.models.goal import SavingsGoal
+        from app.models.budget import Budget
+        from app.models.distribution_rule import DistributionRule
+        from app.models.notification import Notification
+
+        SavingsGoal.query.filter_by(user_id=user_id).delete()
+        Budget.query.filter_by(user_id=user_id).delete()
+        DistributionRule.query.filter_by(user_id=user_id).delete()
+        Notification.query.filter_by(user_id=user_id).delete()
+
+        # 5. Soft-delete user (anonymizes PII, frees email/phone, preserves transaction history)
+        user.soft_delete()
+
+        db.session.commit()
+
+        # 6. Audit Logging
+        AdminAuditLog.record(
+            admin_email=current_user.email,
+            action='admin_delete_user',
+            target_type='user',
+            target_id=str(user_id),
+            details={
+                'user_email': email,
+                'full_name': full_name,
+                'soft_deleted': True,
+                'timestamp': datetime.utcnow().isoformat()
+            }
+        )
+
+        return json_response(
+            {'id': user_id, 'deleted': True},
+            f"User account for {full_name} ({email}) closed and deleted successfully."
+        )
+
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"[Admin Delete User Error] user_id={user_id}: {str(e)}")
+        return error_response(f"Failed to delete user account: {str(e)}", 500)
 
 
 @bp.route('/api/approvals', methods=['GET'])

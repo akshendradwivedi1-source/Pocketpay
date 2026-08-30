@@ -62,6 +62,64 @@ def create_app(config_name=None):
     
     from app.blueprints.qr import bp as qr_bp
     app.register_blueprint(qr_bp, url_prefix='/qr')
+
+    # =========================================================================
+    # GLOBAL API ERROR HANDLERS (Guarantees JSON responses for API/Auth routes)
+    # =========================================================================
+    from flask import jsonify, request
+
+    def is_api_request():
+        return (
+            request.path.startswith('/api/') or
+            request.path.startswith('/auth/') or
+            request.path.startswith('/admin/api/') or
+            request.is_json or
+            'application/json' in request.headers.get('Accept', '')
+        )
+
+    @app.errorhandler(400)
+    def handle_bad_request(e):
+        if is_api_request():
+            msg = getattr(e, 'description', None) or 'Bad Request'
+            return jsonify({'success': False, 'message': str(msg), 'code': 'BAD_REQUEST'}), 400
+        return e
+
+    @app.errorhandler(401)
+    def handle_unauthorized(e):
+        if is_api_request():
+            return jsonify({'success': False, 'message': 'Authentication required. Please log in.', 'code': 'UNAUTHORIZED'}), 401
+        return e
+
+    @app.errorhandler(403)
+    def handle_forbidden(e):
+        if is_api_request():
+            return jsonify({'success': False, 'message': 'Access forbidden. You do not have permission for this action.', 'code': 'FORBIDDEN'}), 403
+        return e
+
+    @app.errorhandler(404)
+    def handle_not_found(e):
+        if is_api_request():
+            return jsonify({'success': False, 'message': 'Requested API endpoint or resource not found.', 'code': 'NOT_FOUND'}), 404
+        return e
+
+    @app.errorhandler(405)
+    def handle_method_not_allowed(e):
+        if is_api_request():
+            return jsonify({'success': False, 'message': 'Method not allowed for this endpoint.', 'code': 'METHOD_NOT_ALLOWED'}), 405
+        return e
+
+    @app.errorhandler(429)
+    def handle_too_many_requests(e):
+        if is_api_request():
+            return jsonify({'success': False, 'message': 'Too many requests. Please try again later.', 'code': 'RATE_LIMITED'}), 429
+        return e
+
+    @app.errorhandler(500)
+    def handle_server_error(e):
+        if is_api_request():
+            app.logger.error(f"[Unhandled Server Error on {request.path}] {e}")
+            return jsonify({'success': False, 'message': 'Internal server error. Please try again later.', 'code': 'SERVER_ERROR'}), 500
+        return e
     
     with app.app_context():
         from sqlalchemy import inspect, text

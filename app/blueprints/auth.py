@@ -820,14 +820,16 @@ def delete_account():
     """
     Permanently soft-deletes the authenticated user's own account.
     Requirements:
+    - User can only delete their own account (enforced via current_user)
     - Password confirmation required
-    - 2FA verification if TOTP enabled
-    - Wallet balance must be ₹0 and pocket balances must be ₹0
-    - Atomic: either succeeds completely or rolls back
-    - After deletion: session is invalidated, email/phone become free for re-registration
-    - Transaction records preserved (anonymized) for accounting integrity
+    - 2FA verification required if TOTP enabled on account
+    - Wallet balance must be ₹0.00 and pocket balances must be ₹0.00
+    - No pending transactions allowed
+    - Atomic: either succeeds completely or rolls back on database error
+    - Financial transaction history is preserved (linked to anonymized user ID)
+    - After deletion: session invalidated, email/phone immediately freed for fresh re-registration
     """
-    data = request.get_json() or {}
+    data = request.get_json(silent=True) or {}
     password = str(data.get('password') or '').strip()
     confirm_text = str(data.get('confirm_text') or '').strip().upper()
 
@@ -841,13 +843,14 @@ def delete_account():
     if not current_user.verify_password(password):
         return error_response('Incorrect password. Account deletion cancelled.', 401, code='WRONG_PASSWORD')
 
-    # Optional 2FA check if enabled
+    # Mandatory 2FA TOTP check if enabled
     if current_user.totp_enabled:
-        totp_code = data.get('totp_code') or data.get('totp') or data.get('code')
-        if totp_code:
-            verified, err, err_code = current_user.verify_totp(totp_code)
-            if not verified:
-                return error_response(err or 'Invalid Authenticator 2FA code', 401, code=err_code or 'INCORRECT_TOTP')
+        totp_code = str(data.get('totp_code') or data.get('totp') or data.get('code') or '').strip()
+        if not totp_code:
+            return error_response('Google Authenticator 6-digit 2FA code is required to confirm deletion', 400, code='TOTP_REQUIRED')
+        verified, err, err_code = current_user.verify_totp(totp_code)
+        if not verified:
+            return error_response(err or 'Invalid Authenticator 2FA code', 401, code=err_code or 'INCORRECT_TOTP')
 
     # Enforce zero balance before deletion
     wallet_balance = round(float(current_user.wallet_balance or 0.0), 2)
@@ -866,6 +869,15 @@ def delete_account():
             400, code='POCKET_BALANCE_NOT_ZERO'
         )
 
+    # Check for pending transactions
+    from app.models.transaction import Transaction
+    pending_tx = Transaction.query.filter_by(user_id=current_user.id, status='pending').first()
+    if pending_tx:
+        return error_response(
+            f'You have a pending transaction ({pending_tx.transaction_id}). Please wait for it to complete or resolve before deleting your account.',
+            400, code='PENDING_TRANSACTIONS'
+        )
+
     # Admins cannot self-delete via this endpoint (safety measure)
     if current_user.is_admin:
         return error_response(
@@ -874,30 +886,40 @@ def delete_account():
         )
 
     try:
-        # Perform atomic soft-delete
         user_id = current_user.id
         user_name = current_user.full_name
 
-        # Archive/deactivate all pockets
+        # 1. Archive all pockets
         from app.models.pocket import Pocket
         Pocket.query.filter_by(user_id=user_id).update({'archived': True})
 
-        # Disconnect any linked Telegram account
+        # 2. Disconnect any linked Telegram account
         from app.models.telegram_user import TelegramUser
         TelegramUser.query.filter_by(user_id=user_id).delete()
 
-        # Clean up money requests
+        # 3. Clean up money requests
         from app.models.money_request import MoneyRequest
         MoneyRequest.query.filter(
             (MoneyRequest.requester_id == user_id) | (MoneyRequest.target_user_id == user_id)
         ).delete()
 
-        # Anonymize user record & free up email/phone for re-registration
+        # 4. Clean up goals, budgets, distribution rules, notifications
+        from app.models.goal import SavingsGoal
+        from app.models.budget import Budget
+        from app.models.distribution_rule import DistributionRule
+        from app.models.notification import Notification
+
+        SavingsGoal.query.filter_by(user_id=user_id).delete()
+        Budget.query.filter_by(user_id=user_id).delete()
+        DistributionRule.query.filter_by(user_id=user_id).delete()
+        Notification.query.filter_by(user_id=user_id).delete()
+
+        # 5. Anonymize user record & free up email/phone for re-registration
         current_user.soft_delete()
 
         db.session.commit()
 
-        # Invalidate Flask-Login session
+        # 6. Invalidate Flask-Login session
         logout_user()
 
         return json_response({
@@ -907,8 +929,9 @@ def delete_account():
 
     except Exception as e:
         db.session.rollback()
+        logger.error(f"[Delete Account Error] user_id={getattr(current_user, 'id', None)}: {str(e)}")
         return error_response(
-            'Account deletion failed due to a server error. No changes were made. Please try again.',
+            f'Account deletion failed due to a database error: {str(e)}. No changes were made.',
             500, code='DELETION_FAILED'
         )
 

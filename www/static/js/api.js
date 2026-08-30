@@ -13,20 +13,28 @@ PP.API = {
     const baseUrl = this.getBaseUrl();
     const fullUrl = url.startsWith('http') ? url : (baseUrl + url);
     const res = await fetch(fullUrl, {
-      headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', ...(opts.headers || {}) },
       credentials: 'include',
       ...opts,
       body: opts.body ? (typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body)) : undefined,
     });
     let data = null;
-    try { data = await res.json(); } catch {}
-    if (!res.ok) {
-      const err = new Error(data?.message || `HTTP ${res.status}`);
+    const rawText = await res.text();
+    if (rawText) {
+      try {
+        data = JSON.parse(rawText);
+      } catch (parseErr) {
+        data = { success: false, message: `Server error (${res.status}): ${rawText.slice(0, 100)}` };
+      }
+    }
+    if (!res.ok || (data && data.success === false)) {
+      const err = new Error(data?.message || data?.error || `HTTP ${res.status}`);
       err.status = res.status;
+      err.code = data?.code;
       err.data = data || {};
       throw err;
     }
-    return data;
+    return data || {};
   },
   get(u, qs) {
     const url = qs ? `${u}?${new URLSearchParams(qs).toString()}` : u;
@@ -87,8 +95,8 @@ PP.Auth = {
   async unlinkBankAccount(bank_id) {
     return PP.API.post('/auth/unlink-bank-account', { bank_id });
   },
-  async deleteAccount(password, confirm_text = 'DELETE') {
-    return PP.API.post('/auth/delete-account', { password, confirm_text });
+  async deleteAccount(password, confirm_text = 'DELETE', totp_code = null) {
+    return PP.API.post('/auth/delete-account', { password, confirm_text, totp_code });
   },
   async resendOtp(type = 'email') {
     return PP.API.post('/auth/resend-otp', { type });
