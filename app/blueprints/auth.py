@@ -1080,4 +1080,76 @@ def disconnect_telegram():
     return json_response({'disconnected': True}, 'Telegram account disconnected successfully')
 
 
+@bp.route('/set-upi-id', methods=['POST'])
+@api_login_required
+def set_upi_id():
+    """Sets/updates custom Virtual UPI ID for the user, verifying with Google Authenticator TOTP if enabled"""
+    data = request.get_json() or {}
+    valid, msg = validate_required_fields(data, ['upi_id'])
+    if not valid:
+        return error_response(msg, 400)
+    
+    raw_upi = str(data.get('upi_id', '')).strip().lower()
+    if not raw_upi:
+        return error_response('UPI ID cannot be empty', 400)
+    
+    # Auto-append @pocketpay if user enters only username handle
+    if '@' not in raw_upi:
+        raw_upi = f"{raw_upi}@pocketpay"
+        
+    # Format validation: handle@bank
+    if not re.match(r'^[a-zA-Z0-9.\-_]{2,30}@[a-zA-Z0-9]{2,20}$', raw_upi):
+        return error_response('Invalid UPI ID format. Example: yourname@pocketpay or user@okhdfcbank', 400, code='INVALID_UPI_FORMAT')
+        
+    # Check uniqueness
+    existing = User.query.filter(User.virtual_upi_id == raw_upi, User.id != current_user.id).first()
+    if existing:
+        return error_response('This UPI ID is already claimed by another user', 409, code='UPI_ID_TAKEN')
+        
+    # Google Authenticator 2FA TOTP verification
+    if current_user.totp_enabled:
+        totp_code = data.get('totp_code') or data.get('totp') or data.get('otp')
+        if not totp_code:
+            return error_response('Google Authenticator 6-digit 2FA code is required to update your UPI ID', 400, code='TOTP_REQUIRED')
+        verified, err, err_code = current_user.verify_totp(totp_code)
+        if not verified:
+            return error_response(err or 'Invalid Google Authenticator 2FA code', 401, code=err_code or 'INCORRECT_TOTP')
+            
+    current_user.virtual_upi_id = raw_upi
+    current_user.updated_at = datetime.utcnow()
+    db.session.commit()
+    
+    return json_response({
+        'virtual_upi_id': current_user.virtual_upi_id,
+        'user': current_user.to_dict()
+    }, 'Virtual UPI ID updated successfully!')
+
+
+@bp.route('/send-phone-otp', methods=['POST'])
+@api_login_required
+def send_phone_otp():
+    """Generates and sends a 6-digit phone verification OTP"""
+    data = request.get_json() or {}
+    phone = data.get('phone')
+    if phone:
+        clean_phone = str(phone).strip()
+        if len(re.sub(r'[\s\-+]', '', clean_phone)) < 10:
+            return error_response('Please enter a valid phone number (at least 10 digits)', 400)
+        current_user.phone = clean_phone
+        current_user.phone_verified = False
+        db.session.commit()
+        
+    if not current_user.phone:
+        return error_response('No phone number specified', 400)
+        
+    otp = current_user.generate_otp(for_email=False)
+    
+    return json_response({
+        'sent': True,
+        'phone': current_user.phone,
+        'simulated_otp': otp
+    }, f'6-digit verification code sent to {current_user.phone}')
+
+
+
 

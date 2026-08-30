@@ -1003,28 +1003,273 @@ PP.Modals = {
     });
   },
 
-  verifyPhone() {
-    if (!PP.state.user?.phone) {
-      return PP.UI.prompt('Add Phone Number', 'Enter your phone number with country code').then(async phone => {
-        if (!phone) return false;
-        try {
-          await PP.Auth.updateProfile({ phone });
-          PP.state.user.phone = phone;
-          PP.refreshUserChrome();
-        } catch (e) { PP.UI.toast('Error', e.message, 'error'); return false; }
-        return PP.Modals.verifyPhone();
-      });
-    }
-    return PP.UI.prompt('Verify Phone', 'Enter 6-digit OTP sent to your phone').then(async otp => {
-      if (!otp) return false;
-      try {
-        const res = await PP.Auth.verifyPhone(otp);
-        PP.UI.toast('Phone verified', res.message, 'success');
-        PP.state.user.phone_verified = true;
-        PP.refreshUserChrome();
-        return true;
-      } catch (e) { PP.UI.toast('Verification failed', e.message, 'error'); return false; }
+  setUpiId() {
+    const user = PP.state.user;
+    if (!user) return;
+
+    const modal = PP.UI.modal({
+      title: 'Custom UPI ID',
+      subtitle: 'Set your personalized PocketPay UPI ID',
+      icon: 'scan-line',
+      iconClass: 'bg-accent',
+      size: 'sm'
     });
+
+    const currentHandle = (user.virtual_upi_id || '').split('@')[0] || (user.email || '').split('@')[0];
+    let upiInput = currentHandle;
+    let totpInput = '';
+    let isSubmitting = false;
+
+    const body = PP.el('div', { style: 'display:flex;flex-direction:column;gap:1.25rem' });
+
+    // Current UPI Preview
+    body.appendChild(PP.el('div', {
+      class: 'glass-card',
+      style: 'padding:0.75rem 1rem;display:flex;align-items:center;gap:0.75rem;background:rgba(99,102,241,0.06)'
+    }, [
+      PP.el('i', { 'data-lucide': 'at-sign', style: 'color:var(--accent);width:20px;height:20px;flex-shrink:0' }),
+      PP.el('div', { style: 'flex:1;min-width:0' }, [
+        PP.el('div', { style: 'font-size:0.75rem;color:var(--text-muted)' }, ['CURRENT UPI ID']),
+        PP.el('div', { style: 'font-weight:700;font-family:var(--font-mono);font-size:0.95rem;color:#fff' }, [user.virtual_upi_id || 'Not set'])
+      ])
+    ]));
+
+    // Handle Input
+    const inpWrap = PP.el('div', { class: 'form-group' });
+    inpWrap.appendChild(PP.el('label', { class: 'form-label' }, ['Choose New UPI Handle']));
+
+    const inpGroup = PP.el('div', { style: 'display:flex;align-items:center;gap:0.5rem' });
+    const handleInputEl = PP.el('input', {
+      type: 'text',
+      class: 'form-input',
+      placeholder: 'e.g. yourname or nickname',
+      value: currentHandle,
+      maxlength: 30,
+      style: 'flex:1;font-weight:600'
+    });
+    handleInputEl.oninput = (e) => upiInput = e.target.value.trim().toLowerCase();
+
+    inpGroup.append(
+      handleInputEl,
+      PP.el('span', { style: 'font-weight:700;color:var(--accent);font-family:var(--font-mono);padding:0 0.5rem' }, ['@pocketpay'])
+    );
+    inpWrap.appendChild(inpGroup);
+    inpWrap.appendChild(PP.el('div', { style: 'font-size:0.75rem;color:var(--text-muted);margin-top:0.35rem' }, ['Supports letters, numbers, dots, and underscores.']));
+    body.appendChild(inpWrap);
+
+    // Google Authenticator TOTP verification if 2FA enabled
+    let totpInputEl = null;
+    if (user.totp_enabled) {
+      const totpGroup = PP.el('div', { class: 'form-group' }, [
+        PP.el('label', { class: 'form-label', style: 'display:flex;align-items:center;gap:0.4rem' }, [
+          PP.el('i', { 'data-lucide': 'shield-check', style: 'color:var(--accent);width:16px;height:16px' }),
+          'Google Authenticator 2FA OTP (6 Digits)'
+        ]),
+        (totpInputEl = PP.el('input', {
+          type: 'text',
+          class: 'form-input',
+          placeholder: '000000',
+          maxlength: 6,
+          inputmode: 'numeric',
+          style: 'text-align:center;font-family:var(--font-mono);font-size:1.3rem;letter-spacing:0.25em;font-weight:700'
+        }))
+      ]);
+      totpInputEl.oninput = (e) => totpInput = e.target.value.trim();
+      body.appendChild(totpGroup);
+    }
+
+    modal.body.innerHTML = '';
+    modal.body.appendChild(body);
+
+    modal.footer.innerHTML = '';
+    modal.footer.appendChild(PP.el('button', { class: 'btn btn-ghost', onclick: () => modal.close() }, ['Cancel']));
+
+    const saveBtn = PP.el('button', {
+      class: 'btn btn-primary',
+      onclick: async () => {
+        if (isSubmitting) return;
+        const cleanHandle = upiInput.replace(/@.*$/, '').trim();
+        if (!cleanHandle || cleanHandle.length < 2) {
+          return PP.UI.toast('Invalid Handle', 'UPI handle must be at least 2 characters', 'warning');
+        }
+        if (user.totp_enabled && (!totpInput || totpInput.length < 6)) {
+          return PP.UI.toast('2FA Required', 'Please enter your 6-digit Google Authenticator OTP', 'warning');
+        }
+
+        isSubmitting = true;
+        saveBtn.disabled = true;
+        saveBtn.innerHTML = '<i data-lucide="loader-2" style="animation:slowSpin 1s linear infinite"></i> Saving…';
+        PP.refreshIcons();
+
+        try {
+          const newUpi = `${cleanHandle}@pocketpay`;
+          const res = await PP.Auth.setUpiId(newUpi, totpInput || undefined);
+          PP.UI.toast('UPI ID Updated', `Your UPI ID is now ${res.data?.virtual_upi_id || newUpi}`, 'success');
+          if (PP.state.user) {
+            PP.state.user.virtual_upi_id = res.data?.virtual_upi_id || newUpi;
+          }
+          modal.close();
+          if (PP.bootstrap) {
+            try { await PP.bootstrap(true); } catch {}
+          } else {
+            PP.renderView?.();
+          }
+        } catch (err) {
+          const msg = err.data?.message || err.data?.error || err.message || 'Could not update UPI ID';
+          PP.UI.toast('Update Failed', msg, 'error');
+        } finally {
+          isSubmitting = false;
+          saveBtn.disabled = false;
+          saveBtn.innerHTML = 'Save UPI ID';
+          PP.refreshIcons();
+        }
+      }
+    }, ['Save UPI ID']);
+
+    modal.footer.appendChild(saveBtn);
+    PP.refreshIcons();
+  },
+
+  verifyPhone() {
+    const user = PP.state.user;
+    if (!user) return;
+
+    const modal = PP.UI.modal({
+      title: 'Verify Mobile Number',
+      subtitle: 'Secure your PocketPay account with mobile verification',
+      icon: 'smartphone',
+      iconClass: 'bg-accent',
+      size: 'sm'
+    });
+
+    let phoneVal = user.phone || '';
+    let otpVal = '';
+    let step = user.phone ? 2 : 1; // Step 1: Enter Phone, Step 2: Enter OTP
+    let isSubmitting = false;
+
+    const render = () => {
+      const body = PP.el('div', { style: 'display:flex;flex-direction:column;gap:1.25rem' });
+
+      if (step === 1) {
+        body.appendChild(PP.el('div', { class: 'form-group' }, [
+          PP.el('label', { class: 'form-label' }, ['Mobile Phone Number']),
+          (() => {
+            const inp = PP.el('input', {
+              type: 'tel',
+              class: 'form-input',
+              placeholder: '+91 9876543210',
+              value: phoneVal,
+              maxlength: 16
+            });
+            inp.oninput = (e) => phoneVal = e.target.value;
+            return inp;
+          })(),
+          PP.el('div', { style: 'font-size:0.75rem;color:var(--text-muted);margin-top:0.35rem' }, ['Include country code, e.g. +91'])
+        ]));
+
+        modal.body.innerHTML = '';
+        modal.body.appendChild(body);
+
+        modal.footer.innerHTML = '';
+        modal.footer.appendChild(PP.el('button', { class: 'btn btn-ghost', onclick: () => modal.close() }, ['Cancel']));
+        modal.footer.appendChild(PP.el('button', {
+          class: 'btn btn-primary',
+          onclick: async () => {
+            if (!phoneVal || phoneVal.replace(/[^0-9]/g, '').length < 10) {
+              return PP.UI.toast('Invalid Phone', 'Please enter a valid 10-digit phone number', 'warning');
+            }
+            try {
+              const res = await PP.Auth.sendPhoneOtp(phoneVal);
+              PP.UI.toast('OTP Sent', res.message || 'Verification code sent to your phone', 'success');
+              if (res.data?.simulated_otp) {
+                PP.UI.toast('Verification Code', `Your OTP is: ${res.data.simulated_otp}`, 'info');
+              }
+              step = 2;
+              render();
+            } catch (e) {
+              PP.UI.toast('Error', e.message || 'Could not send OTP', 'error');
+            }
+          }
+        }, ['Send Verification OTP']));
+      } else {
+        // Step 2: Enter OTP
+        body.appendChild(PP.el('div', {
+          class: 'glass-card',
+          style: 'padding:0.75rem 1rem;display:flex;align-items:center;justify-content:space-between;background:rgba(99,102,241,0.06)'
+        }, [
+          PP.el('div', [
+            PP.el('div', { style: 'font-size:0.75rem;color:var(--text-muted)' }, ['VERIFYING NUMBER']),
+            PP.el('div', { style: 'font-weight:700;font-family:var(--font-mono);font-size:0.95rem;color:#fff' }, [phoneVal || user.phone])
+          ]),
+          PP.el('button', {
+            class: 'btn btn-ghost btn-sm',
+            onclick: () => { step = 1; render(); }
+          }, ['Change'])
+        ]));
+
+        const otpInp = PP.el('input', {
+          type: 'text',
+          class: 'form-input',
+          placeholder: '000000',
+          maxlength: 6,
+          inputmode: 'numeric',
+          style: 'text-align:center;font-family:var(--font-mono);font-size:1.4rem;letter-spacing:0.25em;font-weight:700'
+        });
+        otpInp.oninput = (e) => otpVal = e.target.value.trim();
+
+        body.appendChild(PP.el('div', { class: 'form-group' }, [
+          PP.el('label', { class: 'form-label' }, ['Enter 6-Digit OTP Code']),
+          otpInp
+        ]));
+
+        modal.body.innerHTML = '';
+        modal.body.appendChild(body);
+
+        modal.footer.innerHTML = '';
+        modal.footer.appendChild(PP.el('button', {
+          class: 'btn btn-ghost',
+          onclick: async () => {
+            try {
+              const res = await PP.Auth.sendPhoneOtp(phoneVal || user.phone);
+              PP.UI.toast('OTP Resent', res.message || 'New OTP sent to your phone', 'success');
+              if (res.data?.simulated_otp) {
+                PP.UI.toast('Verification Code', `Your OTP is: ${res.data.simulated_otp}`, 'info');
+              }
+            } catch (e) {
+              PP.UI.toast('Error', e.message || 'Failed to resend OTP', 'error');
+            }
+          }
+        }, ['Resend Code']));
+
+        modal.footer.appendChild(PP.el('button', {
+          class: 'btn btn-primary',
+          onclick: async () => {
+            if (!otpVal || otpVal.length < 6) {
+              return PP.UI.toast('OTP Required', 'Please enter the 6-digit OTP code', 'warning');
+            }
+            try {
+              const res = await PP.Auth.verifyPhone(otpVal);
+              PP.UI.toast('Phone Verified', res.message || 'Mobile number successfully verified!', 'success');
+              if (PP.state.user) {
+                PP.state.user.phone = phoneVal || user.phone;
+                PP.state.user.phone_verified = true;
+              }
+              modal.close();
+              if (PP.bootstrap) {
+                try { await PP.bootstrap(true); } catch {}
+              } else {
+                PP.renderView?.();
+              }
+            } catch (e) {
+              PP.UI.toast('Verification Failed', e.message || 'Invalid or expired OTP', 'error');
+            }
+          }
+        }, ['Verify Phone']));
+      }
+      PP.refreshIcons();
+    };
+
+    render();
   },
 
   changePin() {

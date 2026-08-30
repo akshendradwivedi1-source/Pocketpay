@@ -66,6 +66,12 @@ PP.Auth = {
   async verifyPhone(otp) {
     return PP.API.post('/auth/verify-phone', { otp });
   },
+  async sendPhoneOtp(phone) {
+    return PP.API.post('/auth/send-phone-otp', { phone });
+  },
+  async setUpiId(upi_id, totp_code) {
+    return PP.API.post('/auth/set-upi-id', { upi_id, totp_code });
+  },
   async requestVerification(email) {
     return PP.API.post('/auth/request-verification', { email });
   },

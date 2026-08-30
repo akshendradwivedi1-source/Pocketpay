@@ -774,6 +774,8 @@ def send_money():
     # 2FA TOTP verification
     if current_user.totp_enabled:
         totp_code = data.get('totp_code') or data.get('totp') or data.get('otp')
+        if not totp_code:
+            return error_response('Google Authenticator 6-digit 2FA code is required', 400, code='TOTP_REQUIRED')
         verified, err, err_code = current_user.verify_totp(totp_code)
         if not verified:
             return error_response(err or 'Invalid Authenticator 2FA code', 401, code=err_code or 'INCORRECT_TOTP')

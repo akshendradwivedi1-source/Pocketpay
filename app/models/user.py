@@ -324,6 +324,12 @@ class User(UserMixin, db.Model):
         return sum(p.current_balance for p in self.pockets.filter_by(archived=False).all())
 
     def to_dict(self, include_sensitive=False):
+        if not self.virtual_wallet_id or not self.virtual_upi_id:
+            try:
+                self.generate_virtual_ids()
+            except Exception:
+                pass
+
         linked_tg = self.get_linked_telegram_user()
         data = {
             'id': self.id,

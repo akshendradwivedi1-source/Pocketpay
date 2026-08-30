@@ -93,10 +93,10 @@ PP.Wallet = {
         PP.el('div', { class: 'section-title' }, [PP.el('h3', {}, ['Virtual Identifiers'])]),
       ]);
       idsCard.appendChild(PP.el('div', { style: 'display:flex;flex-direction:column;gap:.75rem' }, [
-        PP.Wallet.idRow('Wallet ID', user.virtual_wallet_id, 'credit-card'),
-        PP.Wallet.idRow('UPI ID', user.virtual_upi_id, 'scan-line'),
-        PP.Wallet.idRow('Email', user.email, 'mail', user.email_verified),
-        PP.Wallet.idRow('Phone', user.phone || '—', 'smartphone', user.phone_verified),
+        PP.Wallet.idRow('PocketPay Wallet ID', user.virtual_wallet_id, 'credit-card', true),
+        PP.Wallet.idRow('Virtual UPI ID', user.virtual_upi_id, 'scan-line', true, () => PP.Modals.setUpiId()),
+        PP.Wallet.idRow('Email Address', user.email, 'mail', user.email_verified, null, () => PP.Modals.verifyEmail()),
+        PP.Wallet.idRow('Mobile Number', user.phone || '—', 'smartphone', user.phone_verified, () => PP.Modals.verifyPhone(), () => PP.Modals.verifyPhone()),
       ]));
       leftCol.appendChild(idsCard);
 
@@ -268,6 +268,7 @@ PP.Wallet = {
           () => PP.Modals.viewBackupCodes()
         ) : null,
         PP.Wallet.settingRow('Email Verification', user.email_verified ? 'Verified' : 'Verify now', 'mail-check', () => !user.email_verified && PP.Modals.verifyEmail()),
+        PP.Wallet.settingRow('Mobile Verification', user.phone_verified ? `Verified (${user.phone})` : 'Verify phone number now', 'smartphone', () => PP.Modals.verifyPhone()),
         PP.Wallet.settingRow('Change Password', '••••••••', 'key-round', () => PP.Modals.changePassword()),
         PP.Wallet.settingRow('Delete Account', 'Permanently close account (balance must be ₹0)', 'alert-triangle', () => PP.Modals.deleteAccountModal()),
       ].filter(Boolean)));
@@ -308,19 +309,31 @@ PP.Wallet = {
     } catch (e) { PP.UI.toast('Error', e.message, 'error'); }
   },
 
-  idRow(label, value, icon, verified = false) {
-    return PP.el('div', { class: 'glass-card', style: 'padding:1rem;display:flex;align-items:center;gap:1rem' }, [
-      PP.el('div', { class: 'pocket-icon-wrap', style: 'background:var(--accent-alpha);color:var(--accent);width:40px;height:40px' }, [PP.el('i', { 'data-lucide': icon })]),
+  idRow(label, value, icon, verified = false, onEdit = null, onVerify = null) {
+    return PP.el('div', { class: 'glass-card', style: 'padding:0.85rem 1rem;display:flex;align-items:center;gap:1rem' }, [
+      PP.el('div', { class: 'pocket-icon-wrap', style: 'background:var(--accent-alpha);color:var(--accent);width:40px;height:40px;flex-shrink:0' }, [PP.el('i', { 'data-lucide': icon })]),
       PP.el('div', { style: 'flex:1;min-width:0' }, [
-        PP.el('div', { class: 'text-muted text-sm' }, [label]),
-        PP.el('div', { style: 'font-weight:700;word-break:break-all' }, [value || '—']),
+        PP.el('div', { class: 'text-muted text-sm', style: 'font-size:0.75rem' }, [label]),
+        PP.el('div', { style: 'font-weight:700;word-break:break-all;font-family:var(--font-mono);font-size:0.92rem;color:#fff' }, [value || '—']),
       ]),
-      PP.el('div', { style: 'display:flex;gap:.4rem' }, [
-        verified !== undefined && PP.el('span', { class: 'chip ' + (verified ? 'success' : 'warning') }, [verified ? 'Verified' : 'Pending']),
-        PP.el('button', {
-          class: 'btn btn-ghost btn-sm', onclick: () => { navigator.clipboard?.writeText(value); PP.UI.toast('Copied', label + ' copied', 'success'); }
-        }, [PP.el('i', { 'data-lucide': 'copy' })]),
-      ]),
+      PP.el('div', { style: 'display:flex;gap:.4rem;align-items:center;flex-shrink:0' }, [
+        verified !== undefined && PP.el('span', { class: 'chip ' + (verified ? 'success' : 'warning'), style: 'font-size:0.68rem;padding:2px 6px' }, [verified ? 'Verified' : 'Unverified']),
+        onEdit ? PP.el('button', {
+          class: 'btn btn-outline btn-sm',
+          style: 'padding:3px 7px;font-size:0.75rem',
+          onclick: onEdit
+        }, [PP.el('i', { 'data-lucide': 'edit-3', style: 'width:12px;height:12px' }), ' Edit']) : null,
+        (verified === false && onVerify) ? PP.el('button', {
+          class: 'btn btn-primary btn-sm',
+          style: 'padding:3px 7px;font-size:0.75rem',
+          onclick: onVerify
+        }, ['Verify']) : null,
+        value ? PP.el('button', {
+          class: 'btn btn-ghost btn-sm',
+          style: 'padding:4px',
+          onclick: () => { navigator.clipboard?.writeText(value); PP.UI.toast('Copied', label + ' copied', 'success'); }
+        }, [PP.el('i', { 'data-lucide': 'copy', style: 'width:14px;height:14px' })]) : null
+      ].filter(Boolean)),
     ]);
   },
 
