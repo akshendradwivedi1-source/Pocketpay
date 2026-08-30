@@ -87,8 +87,8 @@ PP.Auth = {
   async unlinkBankAccount(bank_id) {
     return PP.API.post('/auth/unlink-bank-account', { bank_id });
   },
-  async deleteAccount(password) {
-    return PP.API.post('/auth/delete-account', { password });
+  async deleteAccount(password, confirm_text = 'DELETE') {
+    return PP.API.post('/auth/delete-account', { password, confirm_text });
   },
   async resendOtp(type = 'email') {
     return PP.API.post('/auth/resend-otp', { type });
@@ -684,7 +684,8 @@ PP.WalletAPI = {
   deleteRule(id) { return PP.API.delete(`/api/wallet/rules/${id}`); },
   categories() { return PP.API.get('/api/wallet/categories'); },
   searchUser(q) { return PP.API.get('/api/wallet/search-user', { q }); },
-  verifyWalletId(wallet_id) { return PP.API.post('/api/wallet/verify-wallet-id', { wallet_id }); },
+  verifyWalletId(wallet_id) { return PP.API.get('/api/wallet/verify-id', { id: wallet_id }); },
+  verifyId(id) { return PP.API.get('/api/wallet/verify-id', { id }); },
   verifyUpi(upi_id) { return PP.API.post('/api/wallet/verify-upi', { upi_id }); },
   sendMoney(payload) {
     const pin = payload.pin;

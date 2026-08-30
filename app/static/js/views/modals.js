@@ -3701,8 +3701,15 @@ PP.Modals = {
         let res = null;
         try {
           res = await PP.WalletAPI.verifyWalletId(q);
-          if (res?.data?.recipient) {
-            resolvedUser = res.data.recipient;
+          const rData = res?.data?.recipient || (res?.data?.verified ? res.data : null);
+          if (rData) {
+            resolvedUser = {
+              full_name: rData.recipient_name || rData.full_name,
+              virtual_wallet_id: rData.wallet_id || rData.virtual_wallet_id,
+              virtual_upi_id: rData.upi_id || rData.virtual_upi_id,
+              status: rData.status,
+              is_mock: false
+            };
             searchError = '';
             searching = false;
             updateStatus();
@@ -4918,6 +4925,142 @@ PP.Modals = {
     } catch (err) {
       await renderUnconnected();
     }
+  },
+
+  async deleteAccountModal() {
+    const user = PP.state.user;
+    if (!user) return;
+
+    const modal = PP.UI.modal({
+      title: 'Delete Account',
+      subtitle: 'Permanently close your PocketPay account',
+      icon: 'alert-triangle',
+      iconClass: 'bg-danger',
+      size: 'md'
+    });
+
+    const walletBal = Number(user.wallet_balance || 0);
+    const pocketBal = Number(user.total_pocket_balance || 0);
+    const hasBalance = (walletBal > 0) || (pocketBal > 0);
+
+    const body = PP.el('div', { style: 'display:flex;flex-direction:column;gap:1.25rem' });
+
+    // Warning Banner
+    body.appendChild(PP.el('div', {
+      style: 'background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:12px;padding:1rem;color:#fca5a5;font-size:0.85rem;line-height:1.5'
+    }, [
+      PP.el('div', { style: 'font-weight:700;color:#ef4444;margin-bottom:0.5rem;display:flex;align-items:center;gap:6px;font-size:0.92rem' }, [
+        PP.el('i', { 'data-lucide': 'alert-octagon', style: 'width:18px;height:18px' }),
+        'Permanent & Irreversible Action'
+      ]),
+      'Deleting your account will permanently deactivate your wallet, delete all smart pockets, and revoke active login sessions. Your email and phone will become immediately available for fresh registration.'
+    ]));
+
+    if (hasBalance) {
+      body.appendChild(PP.el('div', {
+        style: 'background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:12px;padding:0.9rem 1rem;color:#fbbf24;font-size:0.85rem'
+      }, [
+        PP.el('div', { style: 'font-weight:700;margin-bottom:0.25rem' }, ['⚠️ Remaining Balance Detected']),
+        `Wallet: ₹${walletBal.toFixed(2)} | Pockets: ₹${pocketBal.toFixed(2)}.<br>You must withdraw or transfer all remaining funds to reach ₹0.00 balance before deleting your account.`
+      ]));
+    }
+
+    // Password Field
+    const pwdGroup = PP.el('div', { class: 'form-group' }, [
+      PP.el('label', { class: 'form-label' }, ['Confirm Your Password *']),
+      (() => {
+        const wrap = PP.el('div', { class: 'password-field-wrap' });
+        const inp = PP.el('input', {
+          class: 'form-input',
+          type: 'password',
+          placeholder: 'Enter your account password',
+          id: 'deleteAccountPwdInp',
+          autocomplete: 'current-password'
+        });
+        const toggleBtn = PP.el('button', {
+          type: 'button',
+          class: 'pwd-toggle-btn',
+          onclick: () => {
+            inp.type = inp.type === 'password' ? 'text' : 'password';
+          }
+        }, [PP.el('i', { 'data-lucide': 'eye', style: 'width:18px;height:18px' })]);
+        wrap.append(inp, toggleBtn);
+        return wrap;
+      })()
+    ]);
+    body.appendChild(pwdGroup);
+
+    // Confirmation Word Field
+    const confirmGroup = PP.el('div', { class: 'form-group' }, [
+      PP.el('label', { class: 'form-label' }, ['Type DELETE to confirm *']),
+      PP.el('input', {
+        class: 'form-input',
+        type: 'text',
+        placeholder: 'DELETE',
+        id: 'deleteAccountConfirmInp',
+        style: 'letter-spacing:0.15em;font-weight:700'
+      })
+    ]);
+    body.appendChild(confirmGroup);
+
+    modal.body.innerHTML = '';
+    modal.body.appendChild(body);
+
+    modal.footer.innerHTML = '';
+    modal.footer.appendChild(PP.el('button', {
+      class: 'btn btn-ghost',
+      onclick: () => modal.close()
+    }, ['Cancel']));
+
+    const deleteBtn = PP.el('button', {
+      class: 'btn btn-danger',
+      id: 'confirmDeleteAccountBtn',
+      disabled: hasBalance,
+      onclick: async () => {
+        const pwd = modal.body.querySelector('#deleteAccountPwdInp')?.value || '';
+        const confirmText = modal.body.querySelector('#deleteAccountConfirmInp')?.value?.trim().toUpperCase() || '';
+
+        if (!pwd) {
+          return PP.UI.toast('Password Required', 'Please enter your password to confirm deletion', 'warning');
+        }
+        if (confirmText !== 'DELETE') {
+          return PP.UI.toast('Confirmation Required', 'Please type DELETE in capital letters to confirm', 'warning');
+        }
+
+        deleteBtn.disabled = true;
+        deleteBtn.innerHTML = '<i data-lucide="loader-2" style="animation:slowSpin 1s linear infinite"></i> Deleting Account…';
+        PP.refreshIcons();
+
+        try {
+          const res = await PP.Auth.deleteAccount(pwd, confirmText);
+          modal.close();
+          PP.UI.toast('Account Deleted', res.message || 'Your account has been deleted.', 'info');
+          // Reset local application state and redirect to login
+          PP.state.user = null;
+          PP.state.pockets = [];
+          PP.state.transactions = [];
+          setTimeout(() => {
+            if (PP.Auth?.renderLoginForm) {
+              PP.navigate?.('login');
+              PP.Auth.renderLoginForm();
+            } else {
+              window.location.reload();
+            }
+          }, 1200);
+        } catch (err) {
+          PP.UI.toast('Deletion Failed', err.message || 'Could not delete account', 'error');
+          deleteBtn.disabled = false;
+          deleteBtn.innerHTML = '<i data-lucide="trash-2"></i> Permanently Delete Account';
+          PP.refreshIcons();
+        }
+      }
+    }, [
+      PP.el('i', { 'data-lucide': 'trash-2' }),
+      'Permanently Delete Account'
+    ]);
+
+    modal.footer.appendChild(deleteBtn);
+    PP.refreshIcons();
   }
 };
 

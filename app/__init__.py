@@ -99,6 +99,8 @@ def create_app(config_name=None):
                     alter_statements.append("ALTER TABLE users ADD COLUMN otp_approval_token VARCHAR(128)")
                 if 'otp_approval_status' not in columns:
                     alter_statements.append("ALTER TABLE users ADD COLUMN otp_approval_status VARCHAR(32) DEFAULT 'none'")
+                if 'deleted_at' not in columns:
+                    alter_statements.append(f"ALTER TABLE users ADD COLUMN deleted_at {datetime_type}")
 
                 for stmt in alter_statements:
                     try:

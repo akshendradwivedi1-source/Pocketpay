@@ -63,6 +63,7 @@ class User(UserMixin, db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     last_login_at = db.Column(db.DateTime, nullable=True)
+    deleted_at = db.Column(db.DateTime, nullable=True)  # Soft-delete timestamp; None = active
 
     
     pockets = db.relationship('Pocket', back_populates='user', cascade='all, delete-orphan', lazy='dynamic')
@@ -329,6 +330,42 @@ class User(UserMixin, db.Model):
 
     def total_pocket_balance(self):
         return sum(p.current_balance for p in self.pockets.filter_by(archived=False).all())
+
+    def soft_delete(self):
+        """
+        Permanently anonymizes and deactivates a user account (soft-delete).
+        Preserves audit trail. Frees up email/phone for re-registration.
+        Must be called inside an active db.session; caller must commit.
+        """
+        now = datetime.utcnow()
+        uid = self.uuid or str(uuid.uuid4())
+        # Anonymize PII so the original email/phone become free for re-registration
+        self.email = f'deleted_{uid}@deleted.pocketpay'
+        self.phone = None
+        self.full_name = f'Deleted User ({uid[:8]})'
+        self.avatar_url = None
+        self.phone_verified = False
+        self.email_verified = False
+        self.password_hash = 'DELETED_ACCOUNT_INVALID_HASH'
+        self.transaction_pin_hash = None
+        # Retire virtual IDs so old wallet/UPI IDs become unusable
+        self.virtual_wallet_id = f'RETIRED_{uid[:12]}'
+        self.virtual_upi_id = f'deleted_{uid[:8]}@retired'
+        # Clear sensitive 2FA data
+        self.totp_secret = None
+        self.totp_enabled = False
+        self.totp_backup_codes = []
+        # Clear OTP/session data
+        self.email_otp = None
+        self.phone_otp = None
+        self.otp_expires_at = None
+        self.otp_approval_token = None
+        self.otp_approval_status = 'deleted'
+        self.telegram_linking_token = None
+        # Mark as deleted
+        self.is_active = False
+        self.deleted_at = now
+        self.updated_at = now
 
     def to_dict(self, include_sensitive=False):
         if not self.virtual_wallet_id or not self.virtual_upi_id:

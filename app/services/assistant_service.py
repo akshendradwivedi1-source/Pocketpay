@@ -35,15 +35,32 @@ class AssistantService:
             return guardrail_res
 
         # 2. Greetings & Salutations
+        # 2. Greetings & Salutations
         if re.match(r'^(hi|hello|hey|greetings|good\s+(morning|afternoon|evening)|namaste)\b', q):
             return cls._handle_greeting(user)
 
-        # 3. Intent: Balance & Net Worth Inquiry
+        # 3. Intent: PocketPay Wallet ID / UPI ID
+        if any(w in q for w in ['wallet id', 'pocketpay id', 'my id', 'payment id', 'upi id', 'upi', 'virtual upi', 'vpa', 'scan qr', 'receive payment', 'my qr']):
+            return cls._handle_wallet_id_inquiry(user)
+
+        # 4. Intent: Phone / Mobile Verification
+        if any(w in q for w in ['phone', 'mobile', 'verify phone', 'verify mobile', 'phone verification', 'mobile number', 'add phone', 'change phone']):
+            return cls._handle_phone_verification_guide(user)
+
+        # 5. Intent: Account Deletion
+        if any(w in q for w in ['delete account', 'close account', 'delete my account', 'remove account', 'deactivate', 'permanent delete']):
+            return cls._handle_account_deletion_guide(user)
+
+        # 6. Intent: Password / Account Recovery
+        if any(w in q for w in ['forgot password', 'reset password', 'change password', 'lost access', 'recover account']):
+            return cls._handle_password_guide()
+
+        # 7. Intent: Balance & Net Worth Inquiry
         if any(w in q for w in ['balance', 'how much money', 'net worth', 'total money', 'available funds', 'account balance', 'wallet balance']):
             return cls._handle_balance_inquiry(user)
 
-        # 4. Intent: Pockets Inquiry & Highest Pocket
-        if any(w in q for w in ['pocket', 'my pockets', 'list pockets', 'show pockets', 'which pocket', 'where is my money']):
+        # 8. Intent: Pockets Inquiry & Highest Pocket
+        if any(w in q for w in ['pocket', 'pockets', 'my pockets', 'list pockets', 'show pockets', 'which pocket', 'where is my money']):
             if 'most' in q or 'highest' in q or 'maximum' in q or 'largest' in q:
                 return cls._handle_highest_pocket(user)
             elif 'least' in q or 'lowest' in q or 'empty' in q:
@@ -53,39 +70,39 @@ class AssistantService:
             else:
                 return cls._handle_pockets_overview(user)
 
-        # 5. Intent: Spending & Monthly Expenses Analysis
+        # 9. Intent: Spending & Monthly Expenses Analysis
         if any(w in q for w in ['spend', 'spent', 'expense', 'expenses', 'how much did i spend', 'cost', 'spending']):
             return cls._handle_spending_analysis(user, q)
 
-        # 6. Intent: Recent Transactions & Activity
+        # 10. Intent: Recent Transactions & Activity
         if any(w in q for w in ['transaction', 'transactions', 'recent activity', 'last payment', 'latest transaction', 'history', 'statement']):
             return cls._handle_recent_transactions(user)
 
-        # 7. Intent: Savings Goals & Targets
+        # 11. Intent: Savings Goals & Targets
         if any(w in q for w in ['goal', 'goals', 'savings goal', 'target', 'targets', 'saving for']):
             return cls._handle_savings_goals(user)
 
-        # 8. Intent: Budgeting & Alerts
+        # 12. Intent: Budgeting & Alerts
         if any(w in q for w in ['budget', 'budgets', 'limit', 'limits', 'threshold']):
             return cls._handle_budgets(user)
 
-        # 9. Intent: Security, 2FA, TOTP & PIN
+        # 13. Intent: Security, 2FA, TOTP & PIN
         if any(w in q for w in ['totp', '2fa', 'authenticator', 'pin', 'security', 'two factor', 'otp']):
             return cls._handle_security_guide(user, q)
 
-        # 10. Intent: Premium & Subscriptions
+        # 14. Intent: Premium & Subscriptions
         if any(w in q for w in ['premium', 'pro', 'vip', 'subscription', 'plan', 'plans', 'upgrade']):
             return cls._handle_premium_info(user)
 
-        # 11. Intent: Bank Transfer & UPI Sandbox
-        if any(w in q for w in ['bank transfer', 'withdraw to bank', 'upi', 'qr code', 'bank account', 'imps', 'neft']):
+        # 15. Intent: Bank Transfer & UPI Sandbox
+        if any(w in q for w in ['bank transfer', 'withdraw to bank', 'qr code', 'bank account', 'imps', 'neft']):
             return cls._handle_bank_transfer_guide(user)
 
-        # 12. Intent: How-To Transfer / Send Money
+        # 16. Intent: How-To Transfer / Send Money
         if any(w in q for w in ['transfer', 'send money', 'how to send', 'how to transfer', 'pay friend']):
             return cls._handle_transfer_guide()
 
-        # 13. Graceful Domain-Aware Fallback with Suggested Actions
+        # 17. Graceful Domain-Aware Fallback with Suggested Actions
         return cls._handle_fallback(q, user, route)
 
     # =========================================================================
@@ -575,3 +592,103 @@ class AssistantService:
             'actions': [],
             'suggested_prompts': ['What is my balance?', 'Show my pockets', 'What did I spend this month?']
         }
+
+    @classmethod
+    def _handle_wallet_id_inquiry(cls, user: Optional[User]) -> Dict[str, Any]:
+        """Returns the user's own PocketPay Wallet ID and Virtual UPI ID."""
+        if not user:
+            return cls._auth_required_response()
+        wallet_id = user.virtual_wallet_id or '(not yet assigned — visit Wallet page)'
+        upi_id = user.virtual_upi_id or '(not yet assigned — visit Wallet page)'
+        return {
+            'type': 'wallet_id',
+            'title': '🆔 Your PocketPay Identity',
+            'message': (
+                f'Here are your unique PocketPay identifiers:<br><br>'
+                f'<b>Wallet ID:</b> <code>{wallet_id}</code><br>'
+                f'<b>Virtual UPI ID:</b> <code>{upi_id}</code><br><br>'
+                f'Share your <b>Wallet ID</b> or <b>UPI ID</b> with anyone to receive instant payments. '
+                f'You can also show your QR code from the Wallet page for contactless payment.'
+            ),
+            'actions': [
+                {'label': 'Open Wallet Page', 'icon': 'wallet', 'action': 'wallet'},
+                {'label': 'Show QR Code', 'icon': 'qr-code', 'action': 'wallet'},
+            ],
+            'suggested_prompts': ['How do I receive money?', 'What is my balance?', 'How does UPI work?']
+        }
+
+    @classmethod
+    def _handle_phone_verification_guide(cls, user: Optional[User]) -> Dict[str, Any]:
+        """Guides user through phone number verification."""
+        if not user:
+            return cls._auth_required_response()
+        if user.phone_verified:
+            msg = (
+                f'✅ Your mobile number <b>{user.phone}</b> is already verified!<br><br>'
+                f'Phone verification adds an extra layer of trust to your PocketPay account and enables SMS notifications.'
+            )
+        else:
+            phone_hint = f'<br><br>Your current number on file: <b>{user.phone}</b>.' if user.phone else ''
+            msg = (
+                f'📱 To verify your mobile number:{phone_hint}<br><br>'
+                f'<ol><li>Go to <b>Wallet → Virtual Identifiers</b></li>'
+                f'<li>Tap <b>Verify</b> next to "Mobile Number"</li>'
+                f'<li>Enter or confirm your phone number</li>'
+                f'<li>Tap <b>Send Verification OTP</b></li>'
+                f'<li>Your 6-digit code appears <b>right here in the app</b></li>'
+                f'<li>Tap the code to auto-fill it, then tap <b>Verify Phone</b></li></ol>'
+            )
+        return {
+            'type': 'phone_verification',
+            'title': '📱 Mobile Number Verification',
+            'message': msg,
+            'actions': [{'label': 'Go to Wallet', 'icon': 'smartphone', 'action': 'wallet'}],
+            'suggested_prompts': ['What is my UPI ID?', 'How do I enable 2FA?', 'Show my balance']
+        }
+
+    @classmethod
+    def _handle_account_deletion_guide(cls, user: Optional[User]) -> Dict[str, Any]:
+        """Explains account deletion — never executes it directly."""
+        return {
+            'type': 'account_deletion_info',
+            'title': '⚠️ Account Deletion',
+            'message': (
+                '<b>Important:</b> Account deletion is permanent and cannot be undone.<br><br>'
+                'Before you can delete your account:<br>'
+                '<ul>'
+                '<li>Your wallet balance must be <b>₹0.00</b></li>'
+                '<li>All pockets must be <b>empty</b></li>'
+                '<li>You must enter your <b>account password</b> to confirm</li>'
+                '<li>You must type <code>DELETE</code> as final confirmation</li>'
+                '</ul>'
+                'After deletion, your email and phone number become free for re-registration as a new account.<br><br>'
+                '🛡️ <i>The AI assistant cannot delete your account. This action must be completed manually through Security Settings.</i>'
+            ),
+            'actions': [
+                {'label': 'Security Settings', 'icon': 'alert-triangle', 'action': 'wallet'},
+            ],
+            'suggested_prompts': ['How do I withdraw money?', 'How do I empty my pockets?', 'What is my balance?']
+        }
+
+    @classmethod
+    def _handle_password_guide(cls) -> Dict[str, Any]:
+        """Guides user through password reset/change — never reveals passwords."""
+        return {
+            'type': 'password_guide',
+            'title': '🔑 Password Help',
+            'message': (
+                '<b>Change Password:</b><br>'
+                'Go to <b>Wallet → Security Settings → Change Password</b> and enter your current and new password.<br><br>'
+                '<b>Forgot Password?</b><br>'
+                '<ol><li>On the Login screen, tap <b>Forgot Password</b></li>'
+                '<li>Enter your registered email address</li>'
+                '<li>Check your email for a 6-digit reset code</li>'
+                '<li>Enter the code and set your new password</li></ol>'
+                '🛡️ <i>PocketPay never stores or displays your password. The AI assistant cannot see or reveal it.</i>'
+            ),
+            'actions': [
+                {'label': 'Security Settings', 'icon': 'key-round', 'action': 'wallet'},
+            ],
+            'suggested_prompts': ['How do I enable 2FA?', 'How do I change my PIN?', 'Show my balance']
+        }
+

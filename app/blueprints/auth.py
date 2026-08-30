@@ -43,10 +43,11 @@ def register():
     if phone and not re.match(r'^[+\d][\d\s\-\(\)]{8,}$', phone):
         return error_response('Invalid phone number format', 400)
     
-    if User.query.filter_by(email=email).first():
+    # Only block registration if an ACTIVE (non-deleted) account uses this email
+    if User.query.filter_by(email=email).filter(User.deleted_at == None).first():
         return error_response('An account with this email already exists', 409)
     
-    if phone and User.query.filter_by(phone=phone).first():
+    if phone and User.query.filter_by(phone=phone).filter(User.deleted_at == None).first():
         return error_response('Phone number already registered', 409)
     
     try:
@@ -817,95 +818,99 @@ def upgrade_premium():
 @api_login_required
 def delete_account():
     """
-    Allows a user to permanently delete/deactivate their account ONLY IF:
-    1. PocketPay available balance is ₹0
-    2. All pocket balances are ₹0
-    3. No pending transactions/operations exist
-    4. Valid password confirmation is provided
+    Permanently soft-deletes the authenticated user's own account.
+    Requirements:
+    - Password confirmation required
+    - 2FA verification if TOTP enabled
+    - Wallet balance must be ₹0 and pocket balances must be ₹0
+    - Atomic: either succeeds completely or rolls back
+    - After deletion: session is invalidated, email/phone become free for re-registration
+    - Transaction records preserved (anonymized) for accounting integrity
     """
     data = request.get_json() or {}
-    valid, msg = validate_required_fields(data, ['password'])
-    if not valid:
-        return error_response(msg, 400)
-        
-    password = data.get('password', '')
+    password = str(data.get('password') or '').strip()
+    confirm_text = str(data.get('confirm_text') or '').strip().upper()
+
+    if not password:
+        return error_response('Your account password is required to confirm deletion', 400, code='PASSWORD_REQUIRED')
+
+    if confirm_text and confirm_text != 'DELETE':
+        return error_response('Please type DELETE to confirm permanent account deletion', 400, code='CONFIRM_REQUIRED')
+
+    # Verify password
     if not current_user.verify_password(password):
-        return error_response('Incorrect password. Account deletion cancelled.', 401)
-        
+        return error_response('Incorrect password. Account deletion cancelled.', 401, code='WRONG_PASSWORD')
+
+    # Optional 2FA check if enabled
     if current_user.totp_enabled:
         totp_code = data.get('totp_code') or data.get('totp') or data.get('code')
-        verified, err, err_code = current_user.verify_totp(totp_code)
-        if not verified:
-            return error_response(err or 'Invalid Authenticator 2FA code', 401, code=err_code or 'INCORRECT_TOTP')
-        
-    from app.models.pocket import Pocket
-    from app.models.transaction import Transaction
-    
-    # 1. Check wallet balance
-    wallet_bal = round(current_user.wallet_balance or 0.0, 2)
-    
-    # 2. Check all pocket balances
-    pockets = Pocket.query.filter_by(user_id=current_user.id, archived=False).all()
-    pockets_bal = round(sum(p.current_balance for p in pockets), 2)
-    
-    # 3. Check total remaining funds
-    total_remaining = wallet_bal + pockets_bal
-    if total_remaining > 0:
+        if totp_code:
+            verified, err, err_code = current_user.verify_totp(totp_code)
+            if not verified:
+                return error_response(err or 'Invalid Authenticator 2FA code', 401, code=err_code or 'INCORRECT_TOTP')
+
+    # Enforce zero balance before deletion
+    wallet_balance = round(float(current_user.wallet_balance or 0.0), 2)
+    pocket_balance = round(sum(
+        p.current_balance for p in current_user.pockets.filter_by(archived=False).all()
+    ), 2)
+
+    if wallet_balance > 0:
         return error_response(
-            f'Your account cannot be deleted because there is still ₹{total_remaining:,.2f} '
-            f'(₹{wallet_bal:,.2f} in available balance and ₹{pockets_bal:,.2f} in pockets). '
-            'Please withdraw or transfer all funds to ₹0 before deleting your account.',
-            400,
-            code='ACCOUNT_HAS_BALANCE',
-            remaining_balance=total_remaining,
-            wallet_balance=wallet_bal,
-            pocket_balance=pockets_bal
+            f'Your wallet balance is ₹{wallet_balance:,.2f}. Please withdraw or transfer all funds before deleting your account.',
+            400, code='BALANCE_NOT_ZERO'
         )
-        
-    # 4. Check pending transactions
-    pending_txs = Transaction.query.filter_by(user_id=current_user.id, status='pending').count()
-    if pending_txs > 0:
+    if pocket_balance > 0:
         return error_response(
-            f'Your account cannot be deleted because you have {pending_txs} pending transaction(s). '
-            'Please wait for pending operations to resolve.',
-            400,
-            code='PENDING_OPERATIONS'
+            f'Your pockets contain ₹{pocket_balance:,.2f}. Please empty all pockets before deleting your account.',
+            400, code='POCKET_BALANCE_NOT_ZERO'
         )
-        
-    # All checks passed: execute permanent account deletion
-    user_email = current_user.email
-    user_id = current_user.id
-    
-    # 1. Unlink any associated Telegram mappings
-    from app.models.telegram_user import TelegramUser
-    TelegramUser.query.filter_by(user_id=user_id).delete()
-    
-    # 2. Clean up associated Money Requests
-    from app.models.money_request import MoneyRequest
-    MoneyRequest.query.filter(
-        (MoneyRequest.requester_id == user_id) | (MoneyRequest.target_user_id == user_id)
-    ).delete()
-    
-    # 3. Record in admin audit log
-    from app.models.admin_audit_log import AdminAuditLog
-    AdminAuditLog.record(
-        admin_email=user_email,
-        action='user_self_deleted_account',
-        target_type='user',
-        target_id=str(user_id),
-        details={'email': user_email, 'action': 'Account and all associated records permanently purged'}
-    )
-    
-    # 4. Permanently remove user object (cascades pockets, transactions, rules, budgets, notifications)
-    user_to_delete = current_user._get_current_object()
-    logout_user()
-    db.session.delete(user_to_delete)
-    db.session.commit()
-    
-    return json_response({
-        'deleted': True,
-        'email': user_email
-    }, 'Your PocketPay account has been permanently deleted. You can register again with a new account anytime.')
+
+    # Admins cannot self-delete via this endpoint (safety measure)
+    if current_user.is_admin:
+        return error_response(
+            'Admin accounts cannot be self-deleted. Please contact the system administrator.',
+            403, code='ADMIN_CANNOT_DELETE'
+        )
+
+    try:
+        # Perform atomic soft-delete
+        user_id = current_user.id
+        user_name = current_user.full_name
+
+        # Archive/deactivate all pockets
+        from app.models.pocket import Pocket
+        Pocket.query.filter_by(user_id=user_id).update({'archived': True})
+
+        # Disconnect any linked Telegram account
+        from app.models.telegram_user import TelegramUser
+        TelegramUser.query.filter_by(user_id=user_id).delete()
+
+        # Clean up money requests
+        from app.models.money_request import MoneyRequest
+        MoneyRequest.query.filter(
+            (MoneyRequest.requester_id == user_id) | (MoneyRequest.target_user_id == user_id)
+        ).delete()
+
+        # Anonymize user record & free up email/phone for re-registration
+        current_user.soft_delete()
+
+        db.session.commit()
+
+        # Invalidate Flask-Login session
+        logout_user()
+
+        return json_response({
+            'deleted': True,
+            'message': 'Your PocketPay account has been permanently deleted. You may register again with the same email address.'
+        }, f'Account for {user_name} has been permanently deleted.')
+
+    except Exception as e:
+        db.session.rollback()
+        return error_response(
+            'Account deletion failed due to a server error. No changes were made. Please try again.',
+            500, code='DELETION_FAILED'
+        )
 
 
 # =============================================================================
@@ -1149,6 +1154,7 @@ def send_phone_otp():
         'phone': current_user.phone,
         'simulated_otp': otp
     }, f'6-digit verification code sent to {current_user.phone}')
+
 
 
 

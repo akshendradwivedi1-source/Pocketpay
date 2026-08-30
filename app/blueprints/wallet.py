@@ -18,6 +18,9 @@ from app.utils.helpers import (
 bp = Blueprint('wallet', __name__)
 
 
+
+
+
 @bp.route('/balance', methods=['GET'])
 @api_login_required
 def get_wallet_balance():
@@ -650,6 +653,7 @@ def search_user():
     })
 
 
+@bp.route('/verify-id', methods=['POST', 'GET'])
 @bp.route('/verify-wallet-id', methods=['POST', 'GET'])
 @api_login_required
 def verify_wallet_id():
