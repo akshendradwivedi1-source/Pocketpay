@@ -346,111 +346,16 @@ PP.Assistant = {
     document.body.appendChild(chatWindow);
     PP.refreshIcons();
   }
-    // Remove any existing assistant widget
-    const existing = document.getElementById('ppAssistantWidget');
-    if (existing) existing.remove();
+// Deprecated widget creation removed; using separate launcher and chat window.
 
-    const widget = PP.el('div', { id: 'ppAssistantWidget', class: 'assistant-widget' }, [
-      // Floating launcher button
-      PP.el('button', {
-        id: 'assistantLauncher',
-        class: 'assistant-launcher glow-pulse',
-        'aria-label': 'PocketPay AI Assistant',
-        title: 'Need help? Ask PocketPay Assistant',
-        onclick: () => this.toggle(),
-      }, [
-        PP.el('div', { class: 'launcher-icon' }, [
-          PP.el('i', { 'data-lucide': 'sparkles' }),
-        ]),
-        PP.el('span', { class: 'launcher-text hidden-xs' }, ['PocketPay Assistant']),
-        PP.el('span', { class: 'launcher-badge' }, ['AI']),
-      ]),
-
-      // Chat Window
-      PP.el('div', { id: 'assistantWindow', class: 'assistant-window glass-card' }, [
-        // Header
-        PP.el('div', { class: 'assistant-header' }, [
-          PP.el('div', { class: 'assistant-brand' }, [
-            PP.el('div', { class: 'assistant-avatar' }, [
-              PP.el('i', { 'data-lucide': 'bot' }),
-            ]),
-            PP.el('div', {}, [
-              PP.el('h4', {}, ['PocketPay Assistant']),
-              PP.el('div', { class: 'assistant-status' }, [
-                PP.el('span', { class: 'status-dot' }),
-                PP.el('span', { id: 'assistantContextLabel' }, ['Context: Dashboard']),
-              ]),
-            ]),
-          ]),
-          PP.el('div', { class: 'assistant-header-actions' }, [
-            PP.el('button', {
-              class: 'btn-icon',
-              title: 'Clear Chat',
-              onclick: () => this.clearChat(),
-            }, [PP.el('i', { 'data-lucide': 'rotate-ccw', style: 'width:15px;height:15px' })]),
-            PP.el('button', {
-              class: 'btn-icon',
-              title: 'Close Assistant',
-              onclick: () => this.close(),
-            }, [PP.el('i', { 'data-lucide': 'x', style: 'width:18px;height:18px' })]),
-          ]),
-        ]),
-
-        // Quick Context Chips
-        PP.el('div', { class: 'assistant-chips-container' }, [
-          PP.el('div', { class: 'assistant-chips-title' }, [
-            PP.el('i', { 'data-lucide': 'lightbulb', style: 'width:12px;height:12px' }),
-            'Suggested for this page:',
-          ]),
-          PP.el('div', { id: 'assistantChipsList', class: 'assistant-chips-list' }),
-        ]),
-
-        // Messages scroll area
-        PP.el('div', { id: 'assistantMessages', class: 'assistant-messages' }),
-
-        // Guardrail safety notice
-        PP.el('div', { class: 'assistant-guardrail-notice' }, [
-          PP.el('i', { 'data-lucide': 'shield-check', style: 'width:12px;height:12px' }),
-          'Informational assistant. Credentials and financial actions are strictly protected.',
-        ]),
-
-        // Input Footer
-        PP.el('form', {
-          id: 'assistantForm',
-          class: 'assistant-form',
-          onsubmit: (e) => {
-            e.preventDefault();
-            this.handleUserSubmit();
-          },
-        }, [
-          PP.el('input', {
-            id: 'assistantInput',
-            type: 'text',
-            class: 'assistant-input',
-            placeholder: 'Ask anything about PocketPay…',
-            autocomplete: 'off',
-          }),
-          PP.el('button', {
-            type: 'submit',
-            class: 'assistant-send-btn',
-            'aria-label': 'Send Message',
-          }, [
-            PP.el('i', { 'data-lucide': 'send', style: 'width:16px;height:16px' }),
-          ]),
-        ]),
-      ]),
-    ]);
-
-    document.body.appendChild(widget);
-    PP.refreshIcons();
   },
 
   attachEventListeners() {
-    // Close when clicking outside on mobile
+    // Close when clicking outside on mobile (or clicking launcher toggles)
     document.addEventListener('click', (e) => {
-      const widget = document.getElementById('ppAssistantWidget');
-      if (this.isOpen && widget && !widget.contains(e.target)) {
-        // Only auto-close on smaller screens
+      const win = document.getElementById('assistantWindow');
+      const launcher = document.getElementById('assistantLauncher');
+      if (this.isOpen && win && launcher && !win.contains(e.target) && !launcher.contains(e.target)) {
         if (window.innerWidth < 768) {
           this.close();
         }
