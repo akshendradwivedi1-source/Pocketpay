@@ -145,6 +145,7 @@ def format_transaction_receipt(tx):
         'created_at': tx.created_at.isoformat() if tx.created_at else None,
         'date_formatted': tx.created_at.strftime('%d %b %Y, %I:%M %p UTC') if tx.created_at else 'Recent',
         'qr_code_url': qr_code or build_qr_tx_url(tx),
+        'qr_data_uri': qr_code,
         'receipt_url': build_qr_tx_url(tx),
         'verified': True
     }

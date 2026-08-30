@@ -188,15 +188,22 @@ def get_public_base_url(req=None):
 
 def build_qr_wallet_url(user, req=None):
     base = get_public_base_url(req)
+    ident = getattr(user, 'virtual_wallet_id', None) or getattr(user, 'virtual_upi_id', None)
+    if ident:
+        return f"{base}/qr/user/{ident}"
     upi = getattr(user, 'virtual_upi_id', None) or f"{getattr(user, 'email', '').split('@')[0]}@pocketpay"
     name = getattr(user, 'full_name', '') or 'User'
     import urllib.parse
     return f"{base}/qr/pay?user={urllib.parse.quote(upi)}&name={urllib.parse.quote(name)}"
 
 
+def build_qr_user_url(user, req=None):
+    return build_qr_wallet_url(user, req)
+
+
 def build_qr_pocket_url(pocket, req=None):
     base = get_public_base_url(req)
-    ref = getattr(pocket, 'uuid', None) or getattr(pocket, 'id', '')
+    ref = getattr(pocket, 'id', '')
     return f"{base}/qr/pocket/{ref}"
 
 
@@ -212,7 +219,7 @@ def generate_qr_code(data_string, size=300):
     import base64
     try:
         qr = qrcode.QRCode(
-            version=1,
+            version=None,
             error_correction=qrcode.constants.ERROR_CORRECT_M,
             box_size=10,
             border=3,

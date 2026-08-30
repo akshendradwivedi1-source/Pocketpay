@@ -41,7 +41,21 @@
         sidebar.classList.remove('open');
       }
 
-      // 4. Quick Action Sidebar Buttons
+      // 4. QR Actions (TopNav, Sidebar, Dropdown, FAB)
+      if (e.target.closest('#topNavScanBtn, #dropScanQrBtn, #sbScanQr')) {
+        e.preventDefault();
+        avatarDropdown?.classList.remove('show');
+        PP.Modals?.scanAndPay?.();
+        return;
+      }
+      if (e.target.closest('#dropMyQrBtn, #sbMyQr')) {
+        e.preventDefault();
+        avatarDropdown?.classList.remove('show');
+        PP.Modals?.showProfileQr?.();
+        return;
+      }
+
+      // 5. Quick Action Sidebar Buttons
       if (e.target.closest('#sbAddIncome')) {
         e.preventDefault();
         PP.Modals?.addIncome?.();
@@ -58,7 +72,7 @@
         return;
       }
 
-      // 5. FAB & Mobile Quick Menu
+      // 6. FAB & Mobile Quick Menu
       const fabBtn = e.target.closest('#mobileFab, #bottomCenterFab, #quickAddFab');
       if (fabBtn) {
         e.preventDefault();
@@ -74,14 +88,15 @@
       if (fabAction) {
         e.preventDefault();
         const action = fabAction.getAttribute('data-action');
-        if (action === 'income') PP.Modals?.addIncome?.();
+        if (action === 'scan') PP.Modals?.scanAndPay?.();
+        else if (action === 'income') PP.Modals?.addIncome?.();
         else if (action === 'expense') PP.Modals?.addExpense?.();
         else if (action === 'transfer') PP.Modals?.transfer?.();
         else if (action === 'pocket') PP.Modals?.createPocket?.();
         return;
       }
 
-      // 6. Header Theme Toggle
+      // 7. Header Theme Toggle
       if (e.target.closest('#themeToggle')) {
         e.preventDefault();
         const curr = document.documentElement.getAttribute('data-theme') || 'dark';
@@ -89,14 +104,14 @@
         return;
       }
 
-      // 7. Notifications Button
+      // 8. Notifications Button
       if (e.target.closest('#notifBtn')) {
         e.preventDefault();
         PP.Modals?.notifications?.();
         return;
       }
 
-      // 8. Setup PIN & Logout in Dropdown
+      // 9. Setup PIN & Logout in Dropdown
       if (e.target.closest('#setupPinBtn')) {
         e.preventDefault();
         avatarDropdown?.classList.remove('show');

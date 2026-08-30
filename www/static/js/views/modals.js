@@ -1888,278 +1888,363 @@ PP.Modals = {
   },
 
   scanAndPay() {
+    let videoStream = null;
+    let scanAnimFrame = null;
+    let currentFacingMode = 'environment';
+    let isProcessing = false;
+
     const modal = PP.UI.modal({
-      title: 'Scan & Pay QR',
-      subtitle: 'Pay via UPI QR, BharatQR, or PocketPay Wallet ID',
+      title: 'Universal QR Scanner',
+      subtitle: 'Scan User Profile, Pocket, Receipt, or UPI QR',
+      icon: 'scan',
+      iconClass: 'bg-accent',
+      size: 'md'
+    });
+
+    const stopCamera = () => {
+      if (scanAnimFrame) {
+        cancelAnimationFrame(scanAnimFrame);
+        scanAnimFrame = null;
+      }
+      if (videoStream) {
+        try {
+          videoStream.getTracks().forEach(t => t.stop());
+        } catch {}
+        videoStream = null;
+      }
+    };
+
+    // Safely stop camera when modal closes
+    const origClose = modal.close.bind(modal);
+    modal.close = () => {
+      stopCamera();
+      origClose();
+    };
+
+    const body = PP.el('div', { style: 'display:flex;flex-direction:column;gap:1rem' });
+
+    // 1. Camera Viewfinder Container
+    const cameraCard = PP.el('div', {
+      class: 'glass-card',
+      style: 'position:relative;overflow:hidden;border-radius:18px;background:#050711;height:240px;display:flex;align-items:center;justify-content:center;box-shadow:0 8px 32px rgba(0,0,0,0.5);border:1px solid rgba(255,255,255,0.12)'
+    });
+
+    const videoEl = PP.el('video', {
+      autoplay: true,
+      playsinline: true,
+      muted: true,
+      style: 'width:100%;height:100%;object-fit:cover;display:block'
+    });
+
+    const canvasEl = PP.el('canvas', { style: 'display:none' });
+
+    // Viewfinder HUD
+    const hudOverlay = PP.el('div', {
+      id: 'cameraHudOverlay',
+      style: 'position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;pointer-events:none'
+    });
+    hudOverlay.innerHTML = `
+      <div style="position:relative;width:170px;height:170px;border:1.5px dashed rgba(99,102,241,0.6);border-radius:14px;box-shadow:0 0 0 4000px rgba(0,0,0,0.4)">
+        <div style="position:absolute;top:0;left:0;width:20px;height:20px;border-top:3px solid #38bdf8;border-left:3px solid #38bdf8;border-top-left-radius:10px"></div>
+        <div style="position:absolute;top:0;right:0;width:20px;height:20px;border-top:3px solid #38bdf8;border-right:3px solid #38bdf8;border-top-right-radius:10px"></div>
+        <div style="position:absolute;bottom:0;left:0;width:20px;height:20px;border-bottom:3px solid #38bdf8;border-left:3px solid #38bdf8;border-bottom-left-radius:10px"></div>
+        <div style="position:absolute;bottom:0;right:0;width:20px;height:20px;border-bottom:3px solid #38bdf8;border-right:3px solid #38bdf8;border-bottom-right-radius:10px"></div>
+        <div style="position:absolute;left:5%;right:5%;height:2px;background:linear-gradient(90deg,transparent,#38bdf8,#818cf8,transparent);box-shadow:0 0 8px #38bdf8;animation:qrScanLaser 2s ease-in-out infinite"></div>
+      </div>
+      <div style="margin-top:10px;font-size:0.75rem;font-weight:700;color:#fff;text-shadow:0 2px 6px rgba(0,0,0,0.8);letter-spacing:0.03em">
+        Point camera at any PocketPay QR
+      </div>
+    `;
+
+    // Camera Unavailable / Permission denied message
+    const statusMsg = PP.el('div', {
+      id: 'cameraStatusMsg',
+      style: 'display:none;position:absolute;inset:0;background:rgba(15,23,42,0.94);padding:1.25rem;text-align:center;flex-direction:column;align-items:center;justify-content:center;gap:0.5rem;z-index:10'
+    });
+    statusMsg.innerHTML = `
+      <div style="width:42px;height:42px;border-radius:12px;background:rgba(99,102,241,0.15);color:var(--accent);display:flex;align-items:center;justify-content:center">
+        <i data-lucide="camera-off" style="width:22px;height:22px"></i>
+      </div>
+      <div style="font-weight:700;color:#fff;font-size:0.9rem" id="cameraStatusTitle">Camera Inactive</div>
+      <div style="font-size:0.75rem;color:var(--text-muted);max-width:260px" id="cameraStatusDesc">Use "Upload QR Image" or enter the code manually below.</div>
+      <button type="button" class="btn btn-sm btn-outline" id="retryCamBtn" style="margin-top:4px"><i data-lucide="refresh-cw"></i> Start Camera</button>
+    `;
+
+    // Camera switch button
+    const controlsBar = PP.el('div', {
+      style: 'position:absolute;bottom:10px;right:10px;display:flex;gap:0.4rem;z-index:5'
+    });
+    const flipCamBtn = PP.el('button', {
+      type: 'button',
+      class: 'btn btn-sm btn-ghost',
+      style: 'background:rgba(0,0,0,0.65);backdrop-filter:blur(6px);color:#fff;border-radius:9999px;padding:4px 10px;border:1px solid rgba(255,255,255,0.2);font-size:0.75rem',
+      onclick: async () => {
+        currentFacingMode = currentFacingMode === 'environment' ? 'user' : 'environment';
+        await startCamera();
+      }
+    }, [PP.el('i', { 'data-lucide': 'refresh-cw', style: 'width:12px;height:12px' }), 'Flip']);
+    controlsBar.appendChild(flipCamBtn);
+
+    cameraCard.append(videoEl, canvasEl, hudOverlay, statusMsg, controlsBar);
+    body.appendChild(cameraCard);
+
+    // 2. Action Bar (Upload Photo + My QR)
+    const fileInput = PP.el('input', {
+      type: 'file',
+      accept: 'image/*',
+      style: 'display:none'
+    });
+
+    const actionRow = PP.el('div', { style: 'display:flex;gap:0.6rem;justify-content:center' });
+    const uploadBtn = PP.el('button', {
+      type: 'button',
+      class: 'btn btn-outline',
+      style: 'flex:1;font-size:0.85rem;justify-content:center',
+      onclick: () => fileInput.click()
+    }, [PP.el('i', { 'data-lucide': 'image' }), 'Upload QR Photo']);
+
+    const myQrBtn = PP.el('button', {
+      type: 'button',
+      class: 'btn btn-ghost',
+      style: 'flex:1;font-size:0.85rem;justify-content:center;background:rgba(255,255,255,0.03);border:1px solid var(--border)',
+      onclick: () => {
+        modal.close();
+        PP.Modals.showProfileQr();
+      }
+    }, [PP.el('i', { 'data-lucide': 'qr-code' }), 'My QR Code']);
+
+    actionRow.append(uploadBtn, myQrBtn);
+    body.appendChild(actionRow);
+
+    // 3. Manual Paste / Input Box
+    const manualCard = PP.el('div', {
+      class: 'glass-card',
+      style: 'padding:1rem;background:rgba(255,255,255,0.02);border:1px dashed rgba(255,255,255,0.12);border-radius:14px'
+    });
+    manualCard.innerHTML = `
+      <div style="font-size:0.78rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:0.5rem">
+        Or Enter Code / Link
+      </div>
+      <div style="display:flex;gap:0.5rem">
+        <input type="text" id="manualQrInput" class="form-input" placeholder="Paste user, pocket, receipt, or UPI string…" style="font-family:monospace;font-size:0.82rem;flex:1" />
+        <button type="button" class="btn btn-primary" id="manualDetectBtn" style="padding:0 14px">Detect</button>
+      </div>
+    `;
+    body.appendChild(manualCard);
+
+    modal.body.innerHTML = '';
+    modal.body.appendChild(body);
+    modal.body.appendChild(fileInput);
+
+    modal.footer.innerHTML = '';
+    modal.footer.appendChild(PP.el('button', { class: 'btn btn-ghost', onclick: () => modal.close() }, ['Cancel']));
+
+    // Universal Dispatcher
+    const handleQrDetected = async (rawString) => {
+      if (isProcessing || !rawString) return;
+      isProcessing = true;
+      stopCamera();
+      if (navigator.vibrate) try { navigator.vibrate(40); } catch {}
+
+      PP.UI.toast('Processing QR', 'Verifying with PocketPay ledger…', 'info');
+
+      try {
+        const res = await PP.QRAPI.resolve(rawString);
+        modal.close();
+
+        if (res?.type === 'user' && res.user) {
+          PP.Modals.sendMoney({
+            recipient: res.user.virtual_upi_id || res.user.virtual_wallet_id || res.user.email,
+            resolvedUser: res.user
+          });
+        } else if (res?.type === 'pocket' && res.pocket) {
+          if (res.pocket.is_owner || String(res.pocket.id) === String(PP.state.user?.id)) {
+            PP.Pockets.openDetail(res.pocket.id);
+          } else {
+            PP.Modals.scannedPocketModal(res.pocket);
+          }
+        } else if (res?.type === 'transaction' && res.receipt) {
+          PP.Modals.transactionReceiptModal(res.receipt);
+        } else if (res?.type === 'upi' && res.upi_data) {
+          PP.Modals.sendMoney({
+            recipient: res.upi_data.vpa,
+            amount: res.upi_data.suggested_amount || '',
+            note: res.upi_data.note || ''
+          });
+        } else {
+          PP.UI.toast('Unrecognized QR', 'This code does not contain valid PocketPay or UPI data', 'warning');
+        }
+      } catch (err) {
+        isProcessing = false;
+        PP.UI.toast('Scan Error', err.message || 'Could not resolve QR code', 'error');
+        startCamera();
+      }
+    };
+
+    // Photo upload listener
+    fileInput.onchange = async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      try {
+        const img = new Image();
+        img.src = URL.createObjectURL(file);
+        await img.decode();
+        canvasEl.width = img.width;
+        canvasEl.height = img.height;
+        const ctx = canvasEl.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+
+        if ('BarcodeDetector' in window) {
+          try {
+            const detector = new BarcodeDetector({ formats: ['qr_code'] });
+            const barcodes = await detector.detect(img);
+            if (barcodes.length > 0 && barcodes[0].rawValue) {
+              await handleQrDetected(barcodes[0].rawValue);
+              return;
+            }
+          } catch {}
+        }
+        // Prompt fallback for photo string
+        const manualCode = prompt('Could not auto-read barcode from image. Please paste/confirm the QR string:');
+        if (manualCode) await handleQrDetected(manualCode);
+      } catch (fErr) {
+        PP.UI.toast('File Error', 'Could not parse selected image', 'warning');
+      }
+    };
+
+    // Live Camera Stream setup
+    const startCamera = async () => {
+      stopCamera();
+      statusMsg.style.display = 'none';
+      hudOverlay.style.display = 'flex';
+
+      try {
+        if (!navigator.mediaDevices?.getUserMedia) {
+          throw new Error('Camera not supported in this browser');
+        }
+        videoStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: currentFacingMode, width: { ideal: 1280 }, height: { ideal: 720 } }
+        });
+        videoEl.srcObject = videoStream;
+        await videoEl.play();
+
+        let detector = null;
+        if ('BarcodeDetector' in window) {
+          try { detector = new BarcodeDetector({ formats: ['qr_code'] }); } catch {}
+        }
+
+        const scanLoop = async () => {
+          if (!videoStream || isProcessing) return;
+          if (videoEl.readyState >= videoEl.HAVE_CURRENT_DATA && detector) {
+            try {
+              const barcodes = await detector.detect(videoEl);
+              if (barcodes.length > 0 && barcodes[0].rawValue) {
+                await handleQrDetected(barcodes[0].rawValue);
+                return;
+              }
+            } catch {}
+          }
+          scanAnimFrame = requestAnimationFrame(scanLoop);
+        };
+        scanAnimFrame = requestAnimationFrame(scanLoop);
+      } catch (err) {
+        hudOverlay.style.display = 'none';
+        statusMsg.style.display = 'flex';
+        PP.$('#cameraStatusTitle', statusMsg).textContent = 'Camera Inactive';
+        PP.$('#cameraStatusDesc', statusMsg).textContent = err.name === 'NotAllowedError'
+          ? 'Camera permission was denied. Please allow camera permissions or upload a QR image.'
+          : 'Live camera is unavailable in this environment. Use "Upload QR Photo" or paste code.';
+        PP.refreshIcons();
+      }
+    };
+
+    setTimeout(() => {
+      startCamera();
+      PP.$('#retryCamBtn', statusMsg)?.addEventListener('click', () => startCamera());
+      const manualInp = PP.$('#manualQrInput', modal.body);
+      const detectBtn = PP.$('#manualDetectBtn', modal.body);
+      detectBtn?.addEventListener('click', () => {
+        if (manualInp?.value) handleQrDetected(manualInp.value.trim());
+      });
+      manualInp?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && manualInp.value) handleQrDetected(manualInp.value.trim());
+      });
+    }, 50);
+
+    PP.refreshIcons();
+  },
+
+  showProfileQr() {
+    const u = PP.state.user || {};
+    const walletId = u.virtual_wallet_id || `PPW${u.id || '001'}`;
+    const upiId = u.virtual_upi_id || `${(u.email || 'user').split('@')[0]}@pocketpay`;
+    const userUrl = `https://pocketpay-1.onrender.com/qr/user/${walletId}`;
+    const qrImgUrl = `/api/qr?content=${encodeURIComponent(userUrl)}&size=300`;
+
+    const modal = PP.UI.modal({
+      title: 'My Profile QR',
+      subtitle: 'Receive money instantly from any PocketPay user',
       icon: 'qr-code',
       iconClass: 'bg-accent',
       size: 'md'
     });
 
-    let qrContent = '';
-    let parsedRecipient = null;
-    let amount = 0;
-    let sourceType = 'wallet';
-    let selectedPocketId = null;
-    let notes = '';
+    const body = PP.el('div', { style: 'display:flex;flex-direction:column;gap:1.15rem;text-align:center' });
 
-    const pockets = (PP.state.pockets || []).filter(p => !p.archived);
+    // QR Card
+    const qrCard = PP.el('div', {
+      class: 'glass-card',
+      style: 'padding:1.5rem;background:#ffffff;border-radius:18px;margin:0 auto;max-width:240px;box-shadow:0 8px 30px rgba(0,0,0,0.35)'
+    }, [
+      PP.el('img', {
+        src: qrImgUrl,
+        alt: `${u.full_name || 'User'} QR`,
+        style: 'width:190px;height:190px;display:block;margin:0 auto;border-radius:10px;object-fit:contain'
+      }),
+      PP.el('div', { style: 'font-weight:800;font-size:0.92rem;color:#0a0b14;margin-top:8px' }, [u.full_name || 'PocketPay User']),
+      PP.el('div', { style: 'font-family:monospace;font-size:0.75rem;color:#475569;margin-top:2px' }, [upiId])
+    ]);
+    body.appendChild(qrCard);
 
-    const body = PP.el('div', { style: 'display:flex;flex-direction:column;gap:1rem' });
-
-    // QR Input Area
-    const qrSection = PP.el('div', { class: 'glass-card', style: 'padding:1.25rem;background:rgba(255,255,255,0.02);border:1px dashed rgba(255,255,255,0.15);border-radius:14px;text-align:center' });
-    qrSection.innerHTML = `
-      <div style="display:flex;justify-content:center;margin-bottom:0.75rem">
-        <div style="width:48px;height:48px;border-radius:12px;background:rgba(99,102,241,0.12);color:var(--accent);display:flex;align-items:center;justify-content:center">
-          <i data-lucide="scan" style="width:24px;height:24px"></i>
-        </div>
+    // Detail rows
+    const detailsWrap = PP.el('div', {
+      class: 'glass-card',
+      style: 'padding:1rem;border-radius:14px;display:flex;flex-direction:column;gap:0.6rem;background:rgba(255,255,255,0.02);border:1px solid var(--border)'
+    });
+    detailsWrap.innerHTML = `
+      <div style="display:flex;justify-content:space-between;font-size:0.85rem">
+        <span style="color:var(--text-muted)">Virtual UPI ID:</span>
+        <span style="font-weight:700;font-family:monospace;color:var(--accent)">${upiId}</span>
       </div>
-      <p style="margin:0 0 0.5rem;font-weight:600;font-size:0.92rem">Enter UPI ID or Paste QR Code string</p>
-      <input type="text" id="qrInputBox" class="form-input" placeholder="e.g. merchant@upi, upi://pay?pa=... or wallet ID" style="text-align:center;font-family:monospace;font-size:0.88rem" />
-      <div style="margin-top:0.75rem;display:flex;gap:0.5rem;justify-content:center">
-        <button type="button" class="btn btn-sm btn-outline" id="sampleUpiBtn"><i data-lucide="sparkles"></i> Try Sample UPI</button>
+      <div style="display:flex;justify-content:space-between;font-size:0.85rem">
+        <span style="color:var(--text-muted)">Wallet Identifier:</span>
+        <span style="font-weight:700;font-family:monospace;color:#fff">${walletId}</span>
       </div>
     `;
-    body.appendChild(qrSection);
-
-    // Payee details preview card
-    const payeePreview = PP.el('div', { id: 'payeePreviewCard', class: 'glass-card', style: 'display:none;padding:1rem;background:rgba(16,185,129,0.06);border:1px solid rgba(16,185,129,0.2);border-radius:14px' });
-    body.appendChild(payeePreview);
-
-    // Amount & Source group
-    const formFields = PP.el('div', { id: 'qrFormFields', style: 'display:none;flex-direction:column;gap:1rem' });
-    
-    // Amount
-    formFields.appendChild(PP.el('div', { class: 'form-group' }, [
-      PP.el('label', { class: 'form-label' }, ['Amount to Pay (₹) *']),
-      (() => {
-        const inp = PP.el('input', { class: 'form-input', type: 'number', min: '1', step: '0.01', placeholder: 'e.g. 500', id: 'qrAmountInput' });
-        inp.oninput = () => amount = parseFloat(inp.value) || 0;
-        return inp;
-      })()
-    ]));
-
-    // Source Selector (Wallet vs Pocket)
-    formFields.appendChild(PP.el('div', { class: 'form-group' }, [
-      PP.el('label', { class: 'form-label' }, ['Pay From']),
-      (() => {
-        const sel = PP.el('select', { class: 'form-select' });
-        sel.appendChild(PP.el('option', { value: 'wallet' }, [`Available Balance (${PP.fmt(PP.state.user?.wallet_balance || 0)})`]));
-        pockets.forEach(p => {
-          sel.appendChild(PP.el('option', { value: `pocket:${p.id}` }, [`${p.name} Pocket (${PP.fmt(p.current_balance)})`]));
-        });
-        sel.onchange = () => {
-          if (sel.value === 'wallet') {
-            sourceType = 'wallet';
-            selectedPocketId = null;
-          } else {
-            sourceType = 'pocket';
-            selectedPocketId = parseInt(sel.value.split(':')[1]);
-          }
-        };
-        return sel;
-      })()
-    ]));
-
-    // Notes
-    formFields.appendChild(PP.el('div', { class: 'form-group' }, [
-      PP.el('label', { class: 'form-label' }, ['Notes (optional)']),
-      (() => {
-        const inp = PP.el('input', { class: 'form-input', placeholder: 'e.g. Dinner with friends' });
-        inp.oninput = () => notes = inp.value.trim();
-        return inp;
-      })()
-    ]));
-
-    body.appendChild(formFields);
+    body.appendChild(detailsWrap);
 
     modal.body.innerHTML = '';
     modal.body.appendChild(body);
+
     modal.footer.innerHTML = '';
-    modal.footer.appendChild(PP.el('button', { class: 'btn btn-ghost', onclick: () => modal.close() }, ['Cancel']));
+    modal.footer.appendChild(PP.el('button', {
+      class: 'btn btn-outline',
+      onclick: () => {
+        navigator.clipboard.writeText(upiId);
+        PP.UI.toast('Copied', 'UPI ID copied to clipboard', 'success');
+      }
+    }, [PP.el('i', { 'data-lucide': 'copy' }), 'Copy UPI ID']));
 
-    const payBtn = PP.el('button', {
+    modal.footer.appendChild(PP.el('button', {
       class: 'btn btn-primary',
-      id: 'qrPayBtn',
-      disabled: true,
-      onclick: async () => {
-        if (!parsedRecipient) return PP.UI.toast('Invalid QR', 'Please enter a valid QR code or UPI ID', 'warning');
-        if (!(amount > 0)) return PP.UI.toast('Invalid Amount', 'Please enter a valid amount', 'warning');
-
-        try {
-          const pin = await PP.UI.pinPrompt({
-            title: 'Confirm QR Payment',
-            subtitle: `Pay ${PP.fmt(amount)} to ${parsedRecipient.recipient_name || 'Merchant'}`
-          });
-          if (!pin) return;
-
-          payBtn.disabled = true;
-          payBtn.innerHTML = '<i data-lucide="loader-2" style="animation:slowSpin 1s linear infinite"></i> Processing…';
-          PP.refreshIcons();
-
-          const res = await PP.PayoutsAPI.payQR({
-            qr_string: qrContent,
-            amount: amount,
-            source_type: sourceType,
-            pocket_id: selectedPocketId,
-            pin: pin,
-            notes: notes
-          });
-
-          modal.close();
-          PP.UI.showSuccess({
-            title: 'Payment Successful',
-            subtitle: `${PP.fmt(amount)} sent to ${parsedRecipient.display_title || parsedRecipient.recipient_name}`,
-            qr_code_url: res?.data?.qr_code_url || res?.data?.receipt_qr || res?.data?.transaction?.qr_code_url,
-            meta: {
-              'Payee': parsedRecipient.recipient_name,
-              'Method': 'UPI / QR Code',
-              'Reference': res?.data?.transaction?.upi_reference || 'TXN-SUCCESS'
-            }
-          });
-
-          if (PP.state.user && res?.data?.wallet_balance != null) {
-            PP.state.user.wallet_balance = res.data.wallet_balance;
-          }
-          PP.emit('pockets:changed');
-          PP.refreshCurrentView();
-        } catch (e) {
-          PP.UI.toast('Payment Failed', e.message, 'error');
-          payBtn.disabled = false;
-          payBtn.innerHTML = 'Pay Now';
-        }
+      onclick: () => {
+        const a = document.createElement('a');
+        a.href = qrImgUrl;
+        a.download = `PocketPay_${(u.full_name || 'My').replace(/\s+/g, '_')}_QR.png`;
+        a.click();
+        PP.UI.toast('Downloaded', 'Profile QR saved to downloads', 'success');
       }
-    }, ['Pay Now']);
-    modal.footer.appendChild(payBtn);
-
-    // Handler to parse QR
-    const onQrUpdated = async (val) => {
-      qrContent = val.trim();
-      if (!qrContent) {
-        payeePreview.style.display = 'none';
-        formFields.style.display = 'none';
-        payBtn.disabled = true;
-        return;
-      }
-
-      // 1. Automatically detect and verify Transaction Receipt QR scans
-      if (qrContent.includes('/qr/tx/') || qrContent.startsWith('pocketpay://tx/') || /^(PPT|TX)[0-9A-Za-z]+/i.test(qrContent)) {
-        try {
-          const recRes = await PP.TxAPI.verifyReceipt(qrContent);
-          if (recRes?.data?.receipt) {
-            modal.close();
-            PP.Modals.transactionReceiptModal(recRes.data.receipt);
-            return;
-          }
-        } catch (recErr) {
-          console.debug('[QR Scan] Not a transaction receipt:', recErr);
-        }
-      }
-
-      // 2. Automatically detect Pocket QR scans
-      if (qrContent.includes('/qr/pocket/') || qrContent.startsWith('pocketpay://pocket/')) {
-        const pocketRef = qrContent.includes('/qr/pocket/')
-          ? qrContent.split('/qr/pocket/')[1].split('?')[0].split('/')[0].trim()
-          : qrContent.replace('pocketpay://pocket/', '').split('?')[0].split('/')[0].trim();
-        try {
-          const pRes = await PP.PocketsAPI.lookup(pocketRef);
-          if (pRes?.data?.pocket) {
-            const p = pRes.data.pocket;
-            modal.close();
-            if (p.is_owner) {
-              PP.Pockets.openDetail(p.id);
-            } else {
-              PP.Modals.scannedPocketModal(p);
-            }
-            return;
-          }
-        } catch (pErr) {
-          console.debug('[QR Scan] Pocket lookup error:', pErr);
-        }
-      }
-
-      // 3. Automatically detect Wallet QR scans
-      if (qrContent.startsWith('pocketpay://wallet/') || qrContent.includes('/qr/wallet/') || qrContent.includes('/qr/pay')) {
-        let walletIdent = '';
-        if (qrContent.includes('/qr/wallet/')) {
-          walletIdent = qrContent.split('/qr/wallet/')[1].split('?')[0].split('/')[0].trim();
-        } else if (qrContent.includes('/qr/pay')) {
-          try {
-            const u = new URL(qrContent, window.location.origin);
-            walletIdent = u.searchParams.get('user') || u.searchParams.get('upi_id') || '';
-          } catch {
-            walletIdent = '';
-          }
-        } else {
-          walletIdent = qrContent.replace('pocketpay://wallet/', '').trim();
-        }
-        if (walletIdent) {
-          modal.close();
-          PP.Modals.sendMoney({ recipient: walletIdent });
-          return;
-        }
-      }
-
-      try {
-        const res = await PP.PayoutsAPI.parseQR(qrContent);
-        parsedRecipient = res?.data?.qr_data;
-        if (parsedRecipient && parsedRecipient.valid) {
-          if (parsedRecipient.type === 'pocketpay_pocket' && parsedRecipient.pocket_id) {
-            try {
-              const pRes = await PP.PocketsAPI.lookup(parsedRecipient.pocket_id);
-              if (pRes?.data?.pocket) {
-                modal.close();
-                if (pRes.data.pocket.is_owner) {
-                  PP.Pockets.openDetail(pRes.data.pocket.id);
-                } else {
-                  PP.Modals.scannedPocketModal(pRes.data.pocket);
-                }
-                return;
-              }
-            } catch {}
-          }
-
-          payeePreview.style.display = 'block';
-          payeePreview.innerHTML = `
-            <div style="display:flex;align-items:center;gap:0.75rem">
-              <div style="width:38px;height:38px;border-radius:10px;background:rgba(16,185,129,0.15);color:#10b981;display:flex;align-items:center;justify-content:center">
-                <i data-lucide="check-circle" style="width:20px;height:20px"></i>
-              </div>
-              <div>
-                <div style="font-weight:700;font-size:0.95rem;color:#fff">${parsedRecipient.recipient_name || 'Merchant Payee'}</div>
-                <div style="font-size:0.78rem;color:var(--text-muted);font-family:monospace">${parsedRecipient.display_title || ''}</div>
-              </div>
-            </div>
-          `;
-          formFields.style.display = 'flex';
-          if (parsedRecipient.suggested_amount && parsedRecipient.suggested_amount > 0) {
-            amount = parsedRecipient.suggested_amount;
-            const amtInp = modal.body.querySelector('#qrAmountInput');
-            if (amtInp) amtInp.value = amount;
-          }
-          payBtn.disabled = false;
-          PP.refreshIcons();
-        }
-      } catch (e) {
-        payeePreview.style.display = 'none';
-        formFields.style.display = 'none';
-        payBtn.disabled = true;
-      }
-    };
-
-    setTimeout(() => {
-      const inp = modal.body.querySelector('#qrInputBox');
-      if (inp) {
-        inp.addEventListener('input', (e) => onQrUpdated(e.target.value));
-      }
-      modal.body.querySelector('#sampleUpiBtn')?.addEventListener('click', () => {
-        if (inp) {
-          inp.value = 'coffee.shop@okaxis';
-          onQrUpdated('coffee.shop@okaxis');
-        }
-      });
-    }, 0);
+    }, [PP.el('i', { 'data-lucide': 'download' }), 'Save QR']));
 
     PP.refreshIcons();
   },
@@ -3234,7 +3319,7 @@ PP.Modals = {
     });
 
     let recipientInput = opts.recipient || '';
-    let resolvedUser = null;
+    let resolvedUser = opts.resolvedUser || null;
     let searching = false;
     let searchError = '';
     let amountVal = opts.amount ? Number(opts.amount) : 0;

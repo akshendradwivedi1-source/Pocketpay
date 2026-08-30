@@ -801,4 +801,20 @@ PP.GoalsAPI = {
   delete(id) { return PP.API.delete(`/api/analytics/goals/${id}`); },
 };
 
+// ========== Universal QR Resolver API ==========
+PP.QRAPI = {
+  resolve(content) {
+    return PP.API.post('/qr/api/resolve', { content });
+  },
+  getUser(ref) {
+    return PP.API.get(`/qr/api/user/${encodeURIComponent(ref)}`);
+  },
+  getPocket(ref) {
+    return PP.API.get(`/qr/api/pocket/${encodeURIComponent(ref)}`);
+  },
+  getTransaction(ref) {
+    return PP.API.get(`/qr/api/transaction/${encodeURIComponent(ref)}`);
+  }
+};
+
 

@@ -85,15 +85,19 @@ def parse_payment_qr(qr_string: str) -> dict:
         else:
             return {"valid": False, "error": "Pocket not found or archived"}
 
-    # 2. PocketPay Virtual Wallet QR
-    if qr.startswith("pocketpay://wallet/") or "/qr/wallet/" in qr or "/qr/pay" in qr:
+    # 2. PocketPay User / Virtual Wallet QR
+    if qr.startswith("pocketpay://wallet/") or qr.startswith("pocketpay://user/") or "/qr/wallet/" in qr or "/qr/user/" in qr or "/qr/pay" in qr:
         wallet_id = ""
-        if "/qr/wallet/" in qr:
+        if "/qr/user/" in qr:
+            wallet_id = qr.split("/qr/user/")[-1].split("?")[0].split("/")[0].strip()
+        elif "/qr/wallet/" in qr:
             wallet_id = qr.split("/qr/wallet/")[-1].split("?")[0].split("/")[0].strip()
         elif "/qr/pay" in qr:
             parsed = urlparse(qr)
             qs = parse_qs(parsed.query)
             wallet_id = qs.get('user', [''])[0].strip() or qs.get('upi_id', [''])[0].strip()
+        elif qr.startswith("pocketpay://user/"):
+            wallet_id = qr.replace("pocketpay://user/", "").strip()
         else:
             wallet_id = qr.replace("pocketpay://wallet/", "").strip()
 

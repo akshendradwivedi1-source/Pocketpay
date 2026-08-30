@@ -103,6 +103,9 @@
         </div>
       </div>
       <div class="nav-right">
+        <button id="topNavScanBtn" class="icon-btn" aria-label="Scan QR Code" title="Scan QR Code">
+          <i data-lucide="scan"></i>
+        </button>
         <button id="themeToggle" class="icon-btn" aria-label="Toggle theme" title="Toggle theme">
           <i data-lucide="moon" class="theme-moon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-moon theme-moon"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg></i>
           <i data-lucide="sun" class="theme-sun"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-sun theme-sun"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg></i>
@@ -130,6 +133,8 @@
             </div>
             <div class="dropdown-divider"></div>
             <a href="/admin/dashboard" class="dropdown-item" id="adminPortalLink" style="display:none;color:#818cf8"><i data-lucide="shield"></i> Admin Control Center</a>
+            <button class="dropdown-item" id="dropMyQrBtn"><i data-lucide="qr-code"></i> My Profile QR</button>
+            <button class="dropdown-item" id="dropScanQrBtn"><i data-lucide="scan"></i> Scan & Pay QR</button>
             <button class="dropdown-item" data-route="profile"><i data-lucide="user"></i> My Profile</button>
             <button class="dropdown-item" data-route="settings"><i data-lucide="settings"></i> Settings</button>
             <button class="dropdown-item" id="setupPinBtn"><i data-lucide="shield-check"></i> Transaction PIN</button>
@@ -154,6 +159,8 @@
         <div class="sidebar-section">
           <p class="sidebar-label">Quick Actions</p>
           <ul class="nav-list">
+            <li><a href="#" class="nav-item" id="sbScanQr"><i data-lucide="scan" style="color:var(--accent)"></i><span>Scan & Pay QR</span></a></li>
+            <li><a href="#" class="nav-item" id="sbMyQr"><i data-lucide="qr-code" style="color:#38bdf8"></i><span>My Profile QR</span></a></li>
             <li><a href="#" class="nav-item" id="sbAddIncome"><i data-lucide="arrow-down-left" class="income"></i><span>Add Income</span></a></li>
             <li><a href="#" class="nav-item" id="sbAddExpense"><i data-lucide="arrow-up-right" class="expense"></i><span>Pay / Expense</span></a></li>
             <li><a href="#" class="nav-item" id="sbTransfer"><i data-lucide="refresh-ccw"></i><span>Transfer</span></a></li>
@@ -176,7 +183,7 @@
     </aside>
 
     <main id="mainContent" class="main-content">
-      <div id="viewContainer"></div>
+      <div id="viewContainer" class="view-container"></div>
     </main>
   </div>
 
@@ -186,6 +193,7 @@
     </button>
   </div>
   <div class="mobile-fab-menu" id="mobileFabMenu">
+    <button class="fab-item" data-action="scan"><i data-lucide="scan"></i><span>Scan QR</span></button>
     <button class="fab-item" data-action="income"><i data-lucide="arrow-down-left"></i><span>Income</span></button>
     <button class="fab-item" data-action="expense"><i data-lucide="arrow-up-right"></i><span>Pay</span></button>
     <button class="fab-item" data-action="transfer"><i data-lucide="refresh-ccw"></i><span>Transfer</span></button>

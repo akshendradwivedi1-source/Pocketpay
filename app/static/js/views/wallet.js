@@ -213,6 +213,16 @@ PP.Wallet = {
           PP.el('button', {
             class: 'btn btn-outline btn-sm',
             style: 'display:flex;align-items:center;justify-content:center;gap:0.4rem;font-weight:600',
+            onclick: () => PP.Modals.showProfileQr()
+          }, [PP.el('i', { 'data-lucide': 'qr-code' }), 'My QR Code']),
+          PP.el('button', {
+            class: 'btn btn-outline btn-sm',
+            style: 'display:flex;align-items:center;justify-content:center;gap:0.4rem;font-weight:600',
+            onclick: () => PP.Modals.scanAndPay()
+          }, [PP.el('i', { 'data-lucide': 'scan' }), 'Scan QR']),
+          PP.el('button', {
+            class: 'btn btn-outline btn-sm',
+            style: 'display:flex;align-items:center;justify-content:center;gap:0.4rem;font-weight:600',
             onclick: () => PP.Modals.requestMoney()
           }, [PP.el('i', { 'data-lucide': 'hand-coins' }), 'Request Money']),
           PP.el('button', {

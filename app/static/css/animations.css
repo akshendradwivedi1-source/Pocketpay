@@ -57,6 +57,12 @@
   50%      { transform: translate(-10px, 10px) scale(1.1); }
 }
 
+@keyframes qrScanLaser {
+  0%   { top: 8%; opacity: 0.8; }
+  50%  { top: 86%; opacity: 1; }
+  100% { top: 8%; opacity: 0.8; }
+}
+
 @keyframes shimmer {
   0% { transform: translateX(-100%); }
   100% { transform: translateX(300%); }
