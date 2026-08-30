@@ -2789,7 +2789,18 @@ PP.Modals = {
     const t = data.transaction || {};
     const recipient = data.recipient || {};
     const amountVal = data.amount || t.amount || 0;
-    const qrUrl = data.receipt_qr || t.qr_code_url || (t.transaction_id ? `/api/qr?content=${encodeURIComponent('pocketpay://tx/' + t.transaction_id)}` : null);
+    
+    // Resolve clean image URL: base64 Data-URI or dynamic PNG image generator endpoint
+    const rawQr = data.receipt_qr || t.receipt_qr || t.qr_code_url;
+    let qrUrl = null;
+    if (rawQr && typeof rawQr === 'string' && rawQr.startsWith('data:image/')) {
+      qrUrl = rawQr;
+    } else if (t.transaction_id) {
+      qrUrl = `/api/qr?content=${encodeURIComponent('https://pocketpay-1.onrender.com/qr/tx/' + t.transaction_id)}&size=250`;
+    } else if (rawQr) {
+      qrUrl = `/api/qr?content=${encodeURIComponent(rawQr)}&size=250`;
+    }
+
     const senderSource = data.source_name || (t.from_pocket_id ? 'Funding Pocket' : 'PocketPay Wallet');
     const recipientDisplay = recipient.full_name || data.resolvedUser?.full_name || t.merchant || 'PocketPay Member';
     const recipientUpi = recipient.virtual_upi_id || data.resolvedUser?.virtual_upi_id || (t.extra_data?.peer_upi) || '—';
@@ -2828,7 +2839,7 @@ PP.Modals = {
 
     if (qrUrl) {
       qrContainer.innerHTML = `
-        <img src="${qrUrl}" alt="Transaction Receipt QR" style="width:150px;height:150px;display:block;border-radius:8px;object-fit:contain" id="transferReceiptQrImg" />
+        <img src="${qrUrl}" alt="Transaction Receipt QR" style="width:150px;height:150px;display:block;border-radius:8px;object-fit:contain" id="transferReceiptQrImg" onerror="this.src='/api/qr?content=${encodeURIComponent('https://pocketpay-1.onrender.com/qr/tx/' + (t.transaction_id || ''))}&size=250'" />
         <div style="font-size:0.72rem;font-weight:800;color:#0a0b14;margin-top:6px;letter-spacing:0.02em">
           Digital Verification QR
         </div>
@@ -2849,7 +2860,7 @@ PP.Modals = {
       setTimeout(() => {
         PP.$('#retryQrBtn', qrContainer)?.addEventListener('click', async () => {
           try {
-            const genRes = await PP.API.post('/api/qr/generate', { content: `pocketpay://tx/${t.transaction_id}` });
+            const genRes = await PP.API.post('/api/qr/generate', { content: `https://pocketpay-1.onrender.com/qr/tx/${t.transaction_id}` });
             if (genRes?.data?.qr_code_url) {
               qrContainer.innerHTML = `
                 <img src="${genRes.data.qr_code_url}" alt="Transaction Receipt QR" style="width:150px;height:150px;display:block;border-radius:8px" />
@@ -2936,7 +2947,16 @@ PP.Modals = {
     if (!r) return;
     const isIncome = ['income', 'topup', 'peer_receive'].includes(r.type);
     const isExpense = ['expense', 'peer_send', 'withdraw'].includes(r.type);
-    const qrUrl = r.qr_code_url || (r.transaction_id ? `/api/qr?content=${encodeURIComponent('pocketpay://tx/' + r.transaction_id)}` : null);
+    
+    const rawQr = r.receipt_qr || r.qr_code_url;
+    let qrUrl = null;
+    if (rawQr && typeof rawQr === 'string' && rawQr.startsWith('data:image/')) {
+      qrUrl = rawQr;
+    } else if (r.transaction_id) {
+      qrUrl = `/api/qr?content=${encodeURIComponent('https://pocketpay-1.onrender.com/qr/tx/' + r.transaction_id)}&size=250`;
+    } else if (rawQr) {
+      qrUrl = `/api/qr?content=${encodeURIComponent(rawQr)}&size=250`;
+    }
 
     const modal = PP.UI.modal({
       title: 'Verified Transaction Receipt',
@@ -2975,7 +2995,8 @@ PP.Modals = {
         PP.el('img', {
           src: qrUrl,
           alt: 'Transfer Receipt QR',
-          style: 'width:150px;height:150px;display:block;border-radius:8px;object-fit:contain'
+          style: 'width:150px;height:150px;display:block;border-radius:8px;object-fit:contain',
+          onerror: function() { this.src = `/api/qr?content=${encodeURIComponent('https://pocketpay-1.onrender.com/qr/tx/' + (r.transaction_id || ''))}&size=250`; }
         }),
         PP.el('div', {
           style: 'font-size:0.72rem;font-weight:700;color:#0a0b14;margin-top:6px;text-align:center'

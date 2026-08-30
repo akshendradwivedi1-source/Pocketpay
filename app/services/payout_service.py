@@ -55,25 +55,77 @@ def validate_upi_id(vpa: str) -> bool:
     return bool(re.match(r'^[\w\.\-]+@[\w\-]+$', vpa.strip()))
 
 def parse_payment_qr(qr_string: str) -> dict:
-    """Parse PocketPay, UPI, or Generic payment QR strings"""
+    """Parse PocketPay Pocket, Wallet, Transaction, UPI, or Generic payment QR strings"""
     if not qr_string:
         return {"valid": False, "error": "Empty QR data"}
     
     qr = qr_string.strip()
     
-    # 1. PocketPay Virtual Wallet QR
-    if qr.startswith("pocketpay://wallet/"):
-        wallet_id = qr.replace("pocketpay://wallet/", "").strip()
+    # 1. PocketPay Pocket QR (e.g. pocketpay://pocket/123 or https://.../qr/pocket/123)
+    if qr.startswith("pocketpay://pocket/") or "/qr/pocket/" in qr:
+        pocket_ref = qr.split("/qr/pocket/")[-1] if "/qr/pocket/" in qr else qr.replace("pocketpay://pocket/", "").strip()
+        pocket_ref = pocket_ref.split("?")[0].split("/")[0].strip()
+        
+        pocket = None
+        if pocket_ref.isdigit():
+            pocket = Pocket.query.filter_by(id=int(pocket_ref), archived=False).first()
+        if not pocket:
+            pocket = Pocket.query.filter_by(uuid=pocket_ref, archived=False).first()
+            
+        if pocket:
+            owner_name = pocket.user.full_name if pocket.user else "Pocket Owner"
+            return {
+                "valid": True,
+                "type": "pocketpay_pocket",
+                "pocket_id": pocket.id,
+                "recipient_name": owner_name,
+                "suggested_amount": pocket.budget_amount or None,
+                "display_title": f"Pocket: {pocket.name} ({owner_name})"
+            }
+        else:
+            return {"valid": False, "error": "Pocket not found or archived"}
+
+    # 2. PocketPay Virtual Wallet QR
+    if qr.startswith("pocketpay://wallet/") or "/qr/wallet/" in qr or "/qr/pay" in qr:
+        wallet_id = ""
+        if "/qr/wallet/" in qr:
+            wallet_id = qr.split("/qr/wallet/")[-1].split("?")[0].split("/")[0].strip()
+        elif "/qr/pay" in qr:
+            parsed = urlparse(qr)
+            qs = parse_qs(parsed.query)
+            wallet_id = qs.get('user', [''])[0].strip() or qs.get('upi_id', [''])[0].strip()
+        else:
+            wallet_id = qr.replace("pocketpay://wallet/", "").strip()
+
+        target_user = User.query.filter(
+            (User.virtual_wallet_id == wallet_id) | (User.virtual_upi_id == wallet_id) | (User.email == wallet_id)
+        ).first()
+
+        user_name = target_user.full_name if target_user else "PocketPay User"
         return {
             "valid": True,
             "type": "pocketpay_wallet",
             "wallet_id": wallet_id,
-            "recipient_name": "PocketPay User",
+            "recipient_name": user_name,
             "suggested_amount": None,
-            "display_title": f"PocketPay Wallet ({wallet_id})"
+            "display_title": f"PocketPay: {user_name}"
         }
         
-    # 2. Standard UPI Payment URI
+    # 3. PocketPay Transaction or Reference
+    if qr.startswith("pocketpay://tx/") or "/qr/tx/" in qr or re.match(r'^(PPT|TX)[0-9A-Za-z]+$', qr):
+        tx_id = qr.split("/qr/tx/")[-1] if "/qr/tx/" in qr else qr.replace("pocketpay://tx/", "").strip()
+        tx_id = tx_id.split("?")[0].split("/")[0].strip()
+        tx = Transaction.query.filter_by(transaction_id=tx_id).first() or Transaction.query.filter_by(uuid=tx_id).first()
+        return {
+            "valid": True,
+            "type": "pocketpay_tx",
+            "transaction_id": tx_id,
+            "recipient_name": (tx.merchant if tx else "Transaction Reference") or "Transaction Reference",
+            "suggested_amount": tx.amount if tx else None,
+            "display_title": f"Receipt: {tx_id}"
+        }
+
+    # 4. Standard UPI Payment URI
     if qr.startswith("upi://pay?") or qr.startswith("upi://pay"):
         parsed = urlparse(qr)
         qs = parse_qs(parsed.query)
@@ -96,7 +148,7 @@ def parse_payment_qr(qr_string: str) -> dict:
             "display_title": f"{name} ({vpa})"
         }
         
-    # 3. Direct UPI ID string
+    # 5. Direct UPI ID string
     if validate_upi_id(qr):
         return {
             "valid": True,
@@ -106,20 +158,8 @@ def parse_payment_qr(qr_string: str) -> dict:
             "suggested_amount": None,
             "display_title": qr
         }
-        
-    # 4. PocketPay Transaction or Reference
-    if qr.startswith("pocketpay://tx/"):
-        tx_id = qr.replace("pocketpay://tx/", "").strip()
-        return {
-            "valid": True,
-            "type": "pocketpay_tx",
-            "transaction_id": tx_id,
-            "recipient_name": "Transaction Reference",
-            "suggested_amount": None,
-            "display_title": f"Reference {tx_id}"
-        }
 
-    return {"valid": False, "error": "Unrecognized QR format. Please scan a valid UPI or PocketPay QR code."}
+    return {"valid": False, "error": "Unrecognized QR format. Please scan a valid UPI, Pocket, or PocketPay QR code."}
 
 class PayoutProvider:
     """Standardized Banking & Payout Gateway Service (Sandbox / Live)"""
