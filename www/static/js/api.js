@@ -307,46 +307,6 @@ PP.Auth = {
     });
   },
 
-  renderLoginForm() {
-    const wrap = PP.$('#authFormWrapper');
-    if (!wrap) return;
-    wrap.innerHTML = '';
-    
-    // Update active tab buttons if present
-    const tabLogin = PP.$('#tabLogin');
-    const tabReg = PP.$('#tabRegister');
-    if (tabLogin) tabLogin.classList.add('active');
-    if (tabReg) tabReg.classList.remove('active');
-
-    const form = PP.el('form', {
-      class: 'auth-form',
-      onsubmit: async (e) => {
-        e.preventDefault();
-        const btn = PP.$('.auth-submit', form);
-        btn.disabled = true; btn.innerHTML = '<i data-lucide="loader-2" style="animation:slowSpin 1s linear infinite"></i> Signing In…';
-        PP.refreshIcons();
-        try {
-          const fd = new FormData(form);
-          const payload = Object.fromEntries(fd.entries());
-          const res = await PP.Auth.login(payload.email, payload.password, payload.remember === 'on');
-          PP.UI.toast('Welcome back!', res.message || '', 'success');
-          PP.state.user = res?.data?.user || null;
-          
-          if (res?.data?.needs_email_verification) {
-            PP.UI.toast('Email Unverified', 'Please complete email verification', 'warning');
-            PP.Auth.renderOtpVerification(payload.email);
-          } else {
-            setTimeout(() => { PP.bootstrap(true); }, 350);
-          }
-        } catch (err) {
-          PP.UI.toast('Sign In Failed', err.message || 'Invalid email or password', 'error');
-        } finally {
-          btn.disabled = false;
-          btn.innerHTML = 'Sign In';
-        }
-      },
-    });
-
   attachPasswordToggles(container) {
     container.querySelectorAll('.pwd-toggle-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {

@@ -5,7 +5,7 @@ PP.Wallet = {
     const wrap = PP.el('div', { style: 'display:flex;flex-direction:column;gap:1.5rem' });
     container.appendChild(wrap);
 
-    const isProfile = PP.state.route === 'profile';
+    const isProfile = (PP.state.currentRoute === 'profile' || PP.state.route === 'profile');
     wrap.appendChild(PP.el('div', { class: 'page-header' }, [
       PP.el('div', {}, [
         PP.el('p', { class: 'page-eyebrow' }, [isProfile ? 'Account & Security' : 'Account']),

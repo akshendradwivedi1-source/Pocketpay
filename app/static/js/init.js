@@ -172,35 +172,57 @@
         });
       }
 
+      // Safety watchdog: Guarantee loader dissolves within 4.5s under all circumstances
+      const watchdog = setTimeout(() => {
+        const loader = document.getElementById('appLoader');
+        if (loader && !loader.classList.contains('loaded')) {
+          console.warn('[Watchdog] Loader timeout reached - dissolving loader');
+          if (window.PP?.hideLoader) PP.hideLoader();
+          else {
+            loader.classList.add('loaded');
+            setTimeout(() => { loader.style.display = 'none'; }, 400);
+            const app = document.getElementById('app');
+            if (app) app.classList.remove('hidden');
+          }
+        }
+      }, 4500);
+
       // Try to restore an existing authenticated session.
       if (window.PP?.bootstrap) {
         await PP.bootstrap();
       } else {
         throw new Error('PP.bootstrap is not available');
       }
+      clearTimeout(watchdog);
     } catch (error) {
       console.error('PocketPay initialization error:', error);
 
       // Never leave the user stuck on the loading screen.
       try {
-        PP.state.initialized = true;
-        PP.state.user = null;
-        PP.state.currentRoute = 'login';
+        if (window.PP) {
+          PP.state = PP.state || {};
+          PP.state.initialized = true;
+          PP.state.user = null;
+          PP.state.currentRoute = 'login';
 
-        if (PP.renderAuth) {
-          PP.renderAuth();
-        }
+          if (PP.renderAuth) {
+            PP.renderAuth();
+          }
 
-        if (PP.hideLoader) {
-          PP.hideLoader();
+          if (PP.hideLoader) {
+            PP.hideLoader();
+          }
         }
       } catch (fallbackError) {
         console.error('PocketPay fallback initialization failed:', fallbackError);
+      } finally {
         const loader = document.getElementById('appLoader');
         if (loader) {
           loader.classList.add('loaded');
           loader.style.display = 'none';
         }
+        const app = document.getElementById('app');
+        if (app) app.classList.remove('hidden');
       }
     }
   }
