@@ -1180,10 +1180,7 @@ PP.Modals = {
             }
             try {
               const res = await PP.Auth.sendPhoneOtp(phoneVal);
-              PP.UI.toast('OTP Sent', res.message || 'Verification code sent to your phone', 'success');
-              if (res.data?.simulated_otp) {
-                PP.UI.toast('Verification Code', `Your OTP is: ${res.data.simulated_otp}`, 'info');
-              }
+              if (res.data?.simulated_otp) shownOtp = res.data.simulated_otp;
               step = 2;
               render();
             } catch (e) {
@@ -1207,6 +1204,39 @@ PP.Modals = {
           }, ['Change'])
         ]));
 
+        // ── In-App OTP Display Box ────────────────────────────────────
+        if (shownOtp) {
+          body.appendChild(PP.el('div', {
+            style: [
+              'background:linear-gradient(135deg,rgba(99,102,241,0.18),rgba(139,92,246,0.12))',
+              'border:1.5px solid rgba(99,102,241,0.45)',
+              'border-radius:14px',
+              'padding:1rem 1.25rem',
+              'text-align:center',
+              'position:relative',
+              'overflow:hidden'
+            ].join(';')
+          }, [
+            PP.el('div', { style: 'font-size:0.7rem;letter-spacing:0.12em;color:var(--text-muted);text-transform:uppercase;margin-bottom:0.4rem' }, ['🔔 Your PocketPay Verification Code']),
+            PP.el('div', {
+              id: 'pp-otp-display',
+              style: 'font-size:2.2rem;font-weight:900;letter-spacing:0.35em;font-family:var(--font-mono);color:#a5b4fc;user-select:all;cursor:pointer'
+            }, [shownOtp]),
+            PP.el('div', { style: 'font-size:0.7rem;color:var(--text-muted);margin-top:0.4rem' }, ['Tap code to copy • Valid for 10 minutes']),
+          ]));
+          // Auto-fill the OTP input when user clicks the display
+          setTimeout(() => {
+            const disp = document.getElementById('pp-otp-display');
+            if (disp) disp.addEventListener('click', () => {
+              otpVal = shownOtp;
+              if (otpInp) otpInp.value = shownOtp;
+              navigator.clipboard?.writeText(shownOtp).catch(() => {});
+              PP.UI.toast('Auto-filled', 'OTP copied and filled in!', 'success');
+            });
+          }, 100);
+        }
+        // ─────────────────────────────────────────────────────────────
+
         const otpInp = PP.el('input', {
           type: 'text',
           class: 'form-input',
@@ -1218,7 +1248,7 @@ PP.Modals = {
         otpInp.oninput = (e) => otpVal = e.target.value.trim();
 
         body.appendChild(PP.el('div', { class: 'form-group' }, [
-          PP.el('label', { class: 'form-label' }, ['Enter 6-Digit OTP Code']),
+          PP.el('label', { class: 'form-label' }, ['Enter 6-Digit Verification Code']),
           otpInp
         ]));
 
@@ -1231,10 +1261,9 @@ PP.Modals = {
           onclick: async () => {
             try {
               const res = await PP.Auth.sendPhoneOtp(phoneVal || user.phone);
-              PP.UI.toast('OTP Resent', res.message || 'New OTP sent to your phone', 'success');
-              if (res.data?.simulated_otp) {
-                PP.UI.toast('Verification Code', `Your OTP is: ${res.data.simulated_otp}`, 'info');
-              }
+              if (res.data?.simulated_otp) { shownOtp = res.data.simulated_otp; }
+              PP.UI.toast('New Code', 'A fresh code has been generated. Check the code box above.', 'success');
+              render();
             } catch (e) {
               PP.UI.toast('Error', e.message || 'Failed to resend OTP', 'error');
             }
