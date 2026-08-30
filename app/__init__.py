@@ -93,17 +93,18 @@ def create_app(config_name=None):
         if config_name != 'testing':
             from app.seeds import seed_database_if_empty
             seed_database_if_empty()
+
+            # Non-blocking Telegram webhook synchronization on production startup
+            if os.environ.get('TELEGRAM_WEBHOOK_URL') or os.environ.get('RENDER_EXTERNAL_URL'):
+                try:
+                    from app.telegram.service import TelegramService
+                    TelegramService.auto_sync_webhook_async(app)
+                except Exception:
+                    pass
     
     return app
 
 
-# Lazy attribute fallback for default WSGI invocation (e.g. gunicorn app:app)
-_app_instance = None
+# WSGI application instance export for 'gunicorn app:app'
+app = create_app()
 
-def __getattr__(name):
-    if name == 'app':
-        global _app_instance
-        if _app_instance is None:
-            _app_instance = create_app()
-        return _app_instance
-    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")

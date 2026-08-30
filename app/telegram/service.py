@@ -320,6 +320,44 @@ class TelegramService:
             return {"ok": False, "error": "Failed to get webhook info"}
 
     @classmethod
+    def auto_sync_webhook_async(cls, app=None):
+        """
+        Asynchronously verifies and synchronizes the Telegram webhook on production startup.
+        Runs in a non-blocking background daemon thread to ensure Gunicorn starts instantly.
+        """
+        if not cls.is_configured():
+            return
+
+        import threading
+
+        def _sync():
+            try:
+                webhook_base = os.environ.get('TELEGRAM_WEBHOOK_URL') or os.environ.get('RENDER_EXTERNAL_URL')
+                if not webhook_base:
+                    return
+
+                target_url = webhook_base.strip()
+                if not target_url.startswith('http://') and not target_url.startswith('https://'):
+                    target_url = 'https://' + target_url
+                elif target_url.startswith('http://'):
+                    target_url = 'https://' + target_url[7:]
+
+                if not target_url.endswith('/telegram/webhook') and not target_url.endswith('/webhook'):
+                    target_url = f"{target_url.rstrip('/')}/telegram/webhook"
+
+                # Check current webhook to avoid redundant API calls
+                info = cls.get_webhook_info()
+                current_url = info.get('result', {}).get('url', '')
+                if current_url != target_url:
+                    res = cls.set_webhook(target_url)
+                    logger.info(f"[Telegram Auto-Sync] Registered webhook: {target_url} (Result: {res.get('ok')})")
+            except Exception as e:
+                logger.warning(f"[Telegram Auto-Sync] Could not auto-sync webhook on startup: {str(e)}")
+
+        t = threading.Thread(target=_sync, daemon=True, name="TelegramWebhookSync")
+        t.start()
+
+    @classmethod
     def send_event_notification(cls, user, title: str, message: str, event_type: str = 'info') -> bool:
         """
         Sends an account event notification directly to user's linked Telegram chat.
