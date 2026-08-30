@@ -223,10 +223,14 @@ class User(UserMixin, db.Model):
         if not raw_secret or not code:
             return False, 'Secret and verification code are required'
             
-        active_secret = re.sub(r'[\x00-\x1f\s]', '', str(raw_secret)).strip()
+        active_secret = re.sub(r'[\x00-\x1f\s]', '', str(raw_secret)).strip().upper()
         clean_code = re.sub(r'[\x00-\x1f\s\-]', '', str(code)).strip()
-        
-        totp = pyotp.TOTP(active_secret)
+
+        try:
+            totp = pyotp.TOTP(active_secret)
+        except Exception:
+            return False, 'Invalid setup session. Please tap Enable 2FA again to generate a fresh QR code.'
+
         # valid_window=3 provides +/- 90 seconds tolerance for mobile phone clock drift
         if not totp.verify(clean_code, valid_window=3):
             return False, 'Invalid 6-digit code. Please verify the code in Google Authenticator or Microsoft Authenticator and ensure your device time is accurate.'
@@ -279,10 +283,13 @@ class User(UserMixin, db.Model):
             
         raw_code = str(code).strip().upper()
         clean_code = ''.join(raw_code.split()).replace('-', '')
-        
-        import pyotp
-        totp = pyotp.TOTP(self.totp_secret)
-        
+
+        try:
+            import pyotp
+            totp = pyotp.TOTP(self.totp_secret.strip().upper())
+        except Exception:
+            return False, 'Two-factor authentication setup is corrupted. Please disable and re-enable 2FA.', 'TOTP_CONFIG_ERROR'
+
         # Check standard 6-digit TOTP code with drift tolerance
         if clean_code.isdigit() and len(clean_code) == 6:
             if totp.verify(clean_code, valid_window=3):

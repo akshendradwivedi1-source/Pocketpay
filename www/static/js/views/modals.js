@@ -3020,21 +3020,25 @@ PP.Modals = {
           (() => {
             const inp = PP.el('input', {
               class: 'form-input',
-              type: 'text',
-              maxlength: '7',
-              placeholder: '000 000',
+              type: 'number',
+              min: '0',
+              max: '999999',
+              maxlength: '6',
+              placeholder: '123456',
               inputmode: 'numeric',
               autocomplete: 'one-time-code',
               id: 'totpSetupCodeInp',
-              style: 'text-align:center;font-family:var(--font-mono);font-size:1.5rem;letter-spacing:0.25em;font-weight:700'
+              style: 'text-align:center;font-family:var(--font-mono);font-size:1.8rem;letter-spacing:0.35em;font-weight:700;-moz-appearance:textfield'
             });
             inp.oninput = () => {
-              const val = inp.value.replace(/\s+/g, '').replace(/-/g, '');
-              if (val.length === 6) {
+              // Strip any non-digit characters the browser may inject
+              const raw = inp.value.replace(/\D/g, '');
+              if (inp.value !== raw) inp.value = raw;
+              if (raw.length === 6) {
                 setTimeout(() => {
                   const btn = modal.footer.querySelector('#totpVerifyBtn');
                   if (btn && !btn.disabled) btn.click();
-                }, 150);
+                }, 250);
               }
             };
             inp.onkeydown = (e) => {
@@ -3047,6 +3051,9 @@ PP.Modals = {
             return inp;
           })()
         ]);
+        body.appendChild(PP.el('div', { style: 'font-size:0.75rem;color:var(--text-muted);background:rgba(99,102,241,0.07);border-radius:8px;padding:0.55rem 0.8rem;border-left:3px solid var(--accent)' }, [
+          '📱 Open Google Authenticator → tap PocketPay → enter the 6-digit number shown. It refreshes every 30 seconds.'
+        ]));
         body.appendChild(verifyGroup);
 
         modal.body.innerHTML = '';
@@ -3061,9 +3068,12 @@ PP.Modals = {
           onclick: async () => {
             const inp = modal.body.querySelector('#totpSetupCodeInp');
             const rawVal = inp ? inp.value : '';
-            const code = rawVal.replace(/\s+/g, '').replace(/-/g, '').trim();
+            const code = rawVal.replace(/\D/g, '').trim();
             if (!code || code.length < 6) {
-              return PP.UI.toast('Code Required', 'Enter the 6-digit code shown in Google Authenticator or Microsoft Authenticator', 'warning');
+              return PP.UI.toast('Code Required', 'Enter the complete 6-digit code shown in Google Authenticator. Do not include spaces.', 'warning');
+            }
+            if (code.length > 6) {
+              return PP.UI.toast('Too Long', 'Enter only the 6-digit code, no spaces or dashes.', 'warning');
             }
 
             verifyBtn.disabled = true;
