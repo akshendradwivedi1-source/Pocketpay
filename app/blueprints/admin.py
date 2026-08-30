@@ -9,6 +9,7 @@ from app.models.user import User
 from app.models.pocket import Pocket
 from app.models.transaction import Transaction
 from app.models.admin_audit_log import AdminAuditLog
+from app.models.support_ticket import SupportTicket
 from app.utils.helpers import (
     admin_required,
     api_admin_required,
@@ -19,7 +20,7 @@ from app.utils.helpers import (
     paginated_response,
     get_admin_email
 )
-from app.utils.email_service import send_otp_email
+from app.utils.email_service import send_otp_email, send_ticket_resolution_email
 
 logger = logging.getLogger(__name__)
 
@@ -296,6 +297,34 @@ def transactions():
         metrics=metrics,
         admin_email=get_admin_email(),
         active_page='transactions'
+    )
+
+
+@bp.route('/resolution')
+@admin_required
+def resolution():
+    """Transaction Failure Resolution Interface"""
+    metrics = get_live_admin_metrics()
+    return render_template(
+        'admin/resolution.html',
+        metrics=metrics,
+        admin_email=get_admin_email(),
+        active_page='resolution'
+    )
+
+
+@bp.route('/support')
+@admin_required
+def support():
+    """Support Ticket Management Page"""
+    metrics = get_live_admin_metrics()
+    open_count = SupportTicket.query.filter(SupportTicket.status.in_(['OPEN', 'IN_PROGRESS'])).count()
+    return render_template(
+        'admin/support.html',
+        metrics=metrics,
+        open_ticket_count=open_count,
+        admin_email=get_admin_email(),
+        active_page='support'
     )
 
 
@@ -707,3 +736,356 @@ def api_recent_activity():
         item.pop('raw_time', None)
 
     return json_response(activity[:20], 'Recent live activity feed retrieved')
+
+
+# =============================================================================
+# SUPPORT TICKET API ENDPOINTS
+# =============================================================================
+
+def serialize_ticket(t):
+    """Serializes a SupportTicket for admin display"""
+    return {
+        'id': t.id,
+        'ticket_number': t.ticket_number,
+        'user_id': t.user_id,
+        'name': t.name,
+        'email': t.email,
+        'category': t.category,
+        'subject': t.subject,
+        'description': t.description,
+        'transaction_id': t.transaction_id,
+        'status': t.status,
+        'admin_notes': t.admin_notes,
+        'admin_response': t.admin_response,
+        'resolved_by': t.resolved_by,
+        'resolved_at': t.resolved_at.strftime('%Y-%m-%d %H:%M:%S') if t.resolved_at else None,
+        'created_at': t.created_at.strftime('%Y-%m-%d %H:%M:%S') if t.created_at else None,
+        'updated_at': t.updated_at.strftime('%Y-%m-%d %H:%M:%S') if t.updated_at else None,
+    }
+
+
+@bp.route('/api/support/tickets', methods=['GET'])
+@api_admin_required
+def api_support_tickets():
+    """Paginated, searchable, filterable support tickets"""
+    q = request.args.get('q', '').strip()
+    status = request.args.get('status', 'all').strip()
+    category = request.args.get('category', 'all').strip()
+
+    query = SupportTicket.query
+
+    if q:
+        search = f"%{q}%"
+        query = query.filter(
+            or_(
+                SupportTicket.ticket_number.ilike(search),
+                SupportTicket.name.ilike(search),
+                SupportTicket.email.ilike(search),
+                SupportTicket.subject.ilike(search),
+                SupportTicket.description.ilike(search),
+                SupportTicket.transaction_id.ilike(search)
+            )
+        )
+
+    if status != 'all':
+        query = query.filter(SupportTicket.status == status.upper())
+
+    if category != 'all':
+        query = query.filter(SupportTicket.category == category)
+
+    query = query.order_by(SupportTicket.created_at.desc())
+    pagination = get_paginated_query(query)
+    return json_response(paginated_response(pagination, serialize_ticket))
+
+
+@bp.route('/api/support/tickets/<int:ticket_id>', methods=['GET'])
+@api_admin_required
+def api_support_ticket_detail(ticket_id):
+    """Returns full detail for a single support ticket"""
+    ticket = db.session.get(SupportTicket, ticket_id)
+    if not ticket:
+        return error_response('Ticket not found', 404)
+    return json_response(serialize_ticket(ticket), 'Ticket retrieved')
+
+
+@bp.route('/api/support/tickets/<int:ticket_id>/respond', methods=['POST'])
+@api_admin_required
+def api_support_ticket_respond(ticket_id):
+    """Responds to a support ticket and optionally changes its status"""
+    ticket = db.session.get(SupportTicket, ticket_id)
+    if not ticket:
+        return error_response('Ticket not found', 404)
+
+    data = request.get_json() or {}
+    admin_response = str(data.get('response') or data.get('admin_response') or '').strip()
+    if not admin_response:
+        return error_response('A response message is required', 400)
+
+    new_status = str(data.get('status') or '').strip().upper() or 'RESOLVED'
+    valid_statuses = {'OPEN', 'IN_PROGRESS', 'WAITING_FOR_USER', 'RESOLVED', 'CLOSED'}
+    if new_status not in valid_statuses:
+        new_status = 'RESOLVED'
+
+    admin_notes = str(data.get('admin_notes') or '').strip()
+
+    ticket.admin_response = admin_response
+    ticket.status = new_status
+    ticket.resolved_by = current_user.email
+    ticket.resolved_at = datetime.utcnow()
+    if admin_notes:
+        ticket.admin_notes = admin_notes
+    ticket.updated_at = datetime.utcnow()
+    db.session.commit()
+
+    # Email the user with resolution
+    try:
+        send_ticket_resolution_email(ticket, admin_response, current_user.email)
+    except Exception as e:
+        logger.warning(f"Could not send resolution email for ticket {ticket_id}: {e}")
+
+    AdminAuditLog.record(
+        admin_email=current_user.email,
+        action='respond_support_ticket',
+        target_type='support_ticket',
+        target_id=str(ticket_id),
+        details={
+            'ticket_number': ticket.ticket_number,
+            'status': new_status,
+            'user_email': ticket.email
+        }
+    )
+
+    return json_response(serialize_ticket(ticket), f'Ticket {ticket.ticket_number} updated and resolution email dispatched.')
+
+
+@bp.route('/api/support/tickets/<int:ticket_id>/status', methods=['POST'])
+@api_admin_required
+def api_support_ticket_status(ticket_id):
+    """Updates ticket status without responding"""
+    ticket = db.session.get(SupportTicket, ticket_id)
+    if not ticket:
+        return error_response('Ticket not found', 404)
+
+    data = request.get_json() or {}
+    new_status = str(data.get('status') or '').strip().upper()
+    valid_statuses = {'OPEN', 'IN_PROGRESS', 'WAITING_FOR_USER', 'RESOLVED', 'CLOSED'}
+    if new_status not in valid_statuses:
+        return error_response(f'Invalid status. Choose from: {", ".join(valid_statuses)}', 400)
+
+    ticket.status = new_status
+    ticket.updated_at = datetime.utcnow()
+    db.session.commit()
+
+    AdminAuditLog.record(
+        admin_email=current_user.email,
+        action='update_ticket_status',
+        target_type='support_ticket',
+        target_id=str(ticket_id),
+        details={'ticket_number': ticket.ticket_number, 'status': new_status}
+    )
+
+    return json_response(serialize_ticket(ticket), f'Ticket status updated to {new_status}')
+
+
+@bp.route('/api/support/stats', methods=['GET'])
+@api_admin_required
+def api_support_stats():
+    """Returns support ticket summary statistics"""
+    total = SupportTicket.query.count()
+    open_count = SupportTicket.query.filter_by(status='OPEN').count()
+    in_progress = SupportTicket.query.filter_by(status='IN_PROGRESS').count()
+    resolved = SupportTicket.query.filter(SupportTicket.status.in_(['RESOLVED', 'CLOSED'])).count()
+    return json_response({
+        'total': total,
+        'open': open_count,
+        'in_progress': in_progress,
+        'resolved': resolved
+    }, 'Support stats retrieved')
+
+
+# =============================================================================
+# TRANSACTION RESOLUTION API ENDPOINTS
+# =============================================================================
+
+@bp.route('/api/resolution/transactions', methods=['GET'])
+@api_admin_required
+def api_resolution_transactions():
+    """Returns paginated list of failed, pending, or disputed transactions for resolution"""
+    q = request.args.get('q', '').strip()
+    status = request.args.get('status', 'failed').strip()
+
+    query = Transaction.query
+
+    # Default to showing failed + pending
+    if status == 'all':
+        query = query.filter(Transaction.status.in_(['failed', 'pending', 'disputed']))
+    else:
+        query = query.filter(Transaction.status == status)
+
+    if q:
+        search = f"%{q}%"
+        query = query.filter(
+            or_(
+                Transaction.transaction_id.ilike(search),
+                Transaction.merchant.ilike(search),
+                Transaction.description.ilike(search),
+                Transaction.upi_reference.ilike(search)
+            )
+        )
+
+    query = query.order_by(Transaction.created_at.desc())
+    pagination = get_paginated_query(query)
+    return json_response(paginated_response(pagination, serialize_admin_transaction))
+
+
+@bp.route('/api/resolution/transactions/<int:tx_id>/refund', methods=['POST'])
+@api_admin_required
+def api_resolve_refund(tx_id):
+    """
+    Refunds a failed/disputed transaction — restores money to the user's wallet.
+    Atomic: creates a refund Transaction record and credits the user's wallet.
+    """
+    tx = db.session.get(Transaction, tx_id)
+    if not tx:
+        return error_response('Transaction not found', 404)
+
+    if tx.status not in ('failed', 'pending', 'disputed'):
+        return error_response(f'Cannot refund a transaction with status "{tx.status}"', 400)
+
+    user = db.session.get(User, tx.user_id)
+    if not user:
+        return error_response('Associated user not found', 404)
+
+    data = request.get_json() or {}
+    reason = str(data.get('reason') or 'Admin-initiated refund').strip()
+
+    try:
+        # Credit refund amount back to user wallet
+        user.wallet_balance = round((user.wallet_balance or 0.0) + tx.amount, 2)
+
+        # Mark original transaction as refunded
+        tx.status = 'refunded'
+        tx.description = f"[REFUNDED] {tx.description or ''} | Reason: {reason}"
+
+        # Create a refund credit transaction for the audit trail
+        refund_tx = Transaction(
+            transaction_id=Transaction.generate_transaction_id(),
+            user_id=user.id,
+            type='refund',
+            amount=tx.amount,
+            category='Admin Refund',
+            merchant='PocketPay Admin',
+            description=f'Refund for Tx {tx.transaction_id}: {reason}',
+            payment_method='admin_resolution',
+            status='completed'
+        )
+        refund_tx.status = 'completed'
+        db.session.add(refund_tx)
+        db.session.commit()
+
+        AdminAuditLog.record(
+            admin_email=current_user.email,
+            action='refund_transaction',
+            target_type='transaction',
+            target_id=str(tx_id),
+            details={
+                'transaction_id': tx.transaction_id,
+                'amount': tx.amount,
+                'user_email': user.email,
+                'reason': reason
+            }
+        )
+
+        return json_response({
+            'transaction_id': tx.transaction_id,
+            'refund_tx_id': refund_tx.transaction_id,
+            'amount': tx.amount,
+            'user_email': user.email,
+            'new_wallet_balance': user.wallet_balance
+        }, f'₹{tx.amount:.2f} refunded to {user.full_name} ({user.email}) — wallet credited.')
+
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f'[Admin] Refund failed for tx {tx_id}: {e}')
+        return error_response(f'Refund failed: {str(e)}', 500)
+
+
+@bp.route('/api/resolution/transactions/<int:tx_id>/complete', methods=['POST'])
+@api_admin_required
+def api_resolve_complete(tx_id):
+    """
+    Force-completes a pending/stuck transaction.
+    Use only when funds were confirmed transferred externally.
+    """
+    tx = db.session.get(Transaction, tx_id)
+    if not tx:
+        return error_response('Transaction not found', 404)
+
+    if tx.status not in ('pending', 'failed'):
+        return error_response(f'Cannot force-complete a transaction with status "{tx.status}"', 400)
+
+    data = request.get_json() or {}
+    reason = str(data.get('reason') or 'Admin force-completed').strip()
+
+    try:
+        tx.status = 'completed'
+        tx.description = f"[FORCE-COMPLETED] {tx.description or ''} | Admin: {reason}"
+        db.session.commit()
+
+        AdminAuditLog.record(
+            admin_email=current_user.email,
+            action='force_complete_transaction',
+            target_type='transaction',
+            target_id=str(tx_id),
+            details={
+                'transaction_id': tx.transaction_id,
+                'amount': tx.amount,
+                'reason': reason
+            }
+        )
+
+        return json_response(
+            serialize_admin_transaction(tx),
+            f'Transaction {tx.transaction_id} force-completed successfully.'
+        )
+
+    except Exception as e:
+        db.session.rollback()
+        return error_response(f'Force-complete failed: {str(e)}', 500)
+
+
+@bp.route('/api/resolution/transactions/<int:tx_id>/escalate', methods=['POST'])
+@api_admin_required
+def api_resolve_escalate(tx_id):
+    """Marks a transaction as disputed for further escalation review"""
+    tx = db.session.get(Transaction, tx_id)
+    if not tx:
+        return error_response('Transaction not found', 404)
+
+    data = request.get_json() or {}
+    reason = str(data.get('reason') or 'Escalated by admin for senior review').strip()
+
+    try:
+        tx.status = 'disputed'
+        tx.description = f"[ESCALATED] {tx.description or ''} | Reason: {reason}"
+        db.session.commit()
+
+        AdminAuditLog.record(
+            admin_email=current_user.email,
+            action='escalate_transaction',
+            target_type='transaction',
+            target_id=str(tx_id),
+            details={
+                'transaction_id': tx.transaction_id,
+                'reason': reason
+            }
+        )
+
+        return json_response(
+            serialize_admin_transaction(tx),
+            f'Transaction {tx.transaction_id} escalated for senior review.'
+        )
+
+    except Exception as e:
+        db.session.rollback()
+        return error_response(f'Escalate failed: {str(e)}', 500)

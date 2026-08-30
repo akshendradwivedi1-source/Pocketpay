@@ -273,3 +273,89 @@ def assistant_ask():
     result = AssistantService.process_query(user, query, route=route, chat_history=history)
     return json_response(result)
 
+
+# =============================================================================
+# CUSTOMER SUPPORT & HELPLINE ENDPOINTS
+# =============================================================================
+
+@bp.route('/support/contacts', methods=['GET'])
+def get_support_contacts():
+    """Returns official hard-coded PocketPay support contacts"""
+    from app.utils.email_service import SUPPORT_CONTACT_EMAILS, SUPPORT_HELPLINES
+    return json_response({
+        'helplines': SUPPORT_HELPLINES,
+        'emails': SUPPORT_CONTACT_EMAILS,
+        'security_notice': 'PocketPay Support will never ask for your password, OTP or UPI PIN.'
+    })
+
+
+@bp.route('/support/ticket', methods=['POST'])
+def submit_support_ticket():
+    """
+    Submits a real customer support ticket.
+    Dispatches real email notifications to the 3 official PocketPay support emails.
+    """
+    from app.models.support_ticket import SupportTicket
+    from app.utils.email_service import send_support_ticket_notification
+    
+    data = request.get_json() or {}
+    
+    # Extract fields
+    name = (data.get('name') or (current_user.full_name if current_user.is_authenticated else '')).strip()
+    email = (data.get('email') or (current_user.email if current_user.is_authenticated else '')).strip().lower()
+    category = (data.get('category') or 'General Inquiry').strip()
+    subject = (data.get('subject') or '').strip()
+    description = (data.get('description') or '').strip()
+    transaction_id = (data.get('transaction_id') or '').strip() or None
+
+    if not name or len(name) < 2:
+        return error_response('Please provide your full name', 400)
+    if not email or '@' not in email:
+        return error_response('Please provide a valid registered email address', 400)
+    if not subject or len(subject) < 3:
+        return error_response('Please provide a subject for your support request', 400)
+    if not description or len(description) < 10:
+        return error_response('Please provide a detailed description (at least 10 characters)', 400)
+
+    try:
+        ticket = SupportTicket(
+            ticket_number=SupportTicket.generate_ticket_number(),
+            user_id=current_user.id if current_user.is_authenticated else None,
+            name=name,
+            email=email,
+            category=category,
+            subject=subject,
+            description=description,
+            transaction_id=transaction_id,
+            status='OPEN'
+        )
+        db.session.add(ticket)
+        db.session.commit()
+
+        # Dispatch emails asynchronously to all 3 official support addresses
+        send_support_ticket_notification(ticket)
+
+        return json_response({
+            'ticket': ticket.to_dict(),
+            'message': f'Support ticket {ticket.ticket_number} created. Our support team will review and contact you at {email}.'
+        }, f'Support ticket {ticket.ticket_number} submitted successfully!', 201)
+
+    except Exception as e:
+        db.session.rollback()
+        return error_response(f'Failed to submit support ticket: {str(e)}', 500)
+
+
+@bp.route('/support/my-tickets', methods=['GET'])
+@api_login_required
+def get_my_support_tickets():
+    """Retrieves list of support tickets submitted by the authenticated user"""
+    from app.models.support_ticket import SupportTicket
+    tickets = SupportTicket.query.filter(
+        (SupportTicket.user_id == current_user.id) | (SupportTicket.email == current_user.email)
+    ).order_by(SupportTicket.created_at.desc()).all()
+    
+    return json_response({
+        'tickets': [t.to_dict() for t in tickets],
+        'count': len(tickets)
+    })
+

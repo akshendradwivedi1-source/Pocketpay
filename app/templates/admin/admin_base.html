@@ -61,6 +61,17 @@
         <i data-lucide="file-clock"></i>
         <span>Admin Audit Logs</span>
       </a>
+      <a href="{{ url_for('admin.support') }}" class="admin-nav-item {% if active_page == 'support' %}active{% endif %}">
+        <i data-lucide="headphones"></i>
+        <span>Support Tickets</span>
+        {% if open_ticket_count is defined and open_ticket_count > 0 %}
+          <span class="badge-count">{{ open_ticket_count }}</span>
+        {% endif %}
+      </a>
+      <a href="{{ url_for('admin.resolution') }}" class="admin-nav-item {% if active_page == 'resolution' %}active{% endif %}">
+        <i data-lucide="shield-alert"></i>
+        <span>Tx Resolution</span>
+      </a>
     </nav>
 
     <div class="admin-sidebar-footer">

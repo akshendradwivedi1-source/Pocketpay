@@ -517,3 +517,141 @@ def send_welcome_email(recipient_email, user_name="User"):
     </div>
     """
     return send_email_async(subject, recipient_email, body=body, html=html)
+
+
+# =============================================================================
+# OFFICIAL POCKETPAY SUPPORT CONTACTS & NOTIFICATION DISPATCH
+# =============================================================================
+
+SUPPORT_CONTACT_EMAILS = [
+    'agarwal.anirudh2006@gmail.com',
+    'akshendra.dwivedi1@gmail.com',
+    'ankitlawaniya2005@gmail.com'
+]
+
+SUPPORT_HELPLINES = [
+    '+91 85278 70864',
+    '8010906123',
+    '+91 92679 32341'
+]
+
+
+def send_support_ticket_notification(ticket):
+    """
+    Sends notification to the official PocketPay support team when a user opens a ticket.
+    Recipients: agarwal.anirudh2006@gmail.com, akshendra.dwivedi1@gmail.com, ankitlawaniya2005@gmail.com
+    """
+    try:
+        subject = f"POCKETPAY SUPPORT REQUEST [{ticket.ticket_number}] - {ticket.subject}"
+        submitted_at = ticket.created_at.strftime("%Y-%m-%d %H:%M:%S UTC") if ticket.created_at else datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+        
+        body = f"""POCKETPAY SUPPORT REQUEST
+
+Ticket ID: {ticket.ticket_number}
+User: {ticket.name}
+Email: {ticket.email}
+Category: {ticket.category}
+Subject: {ticket.subject}
+Transaction ID: {ticket.transaction_id or 'N/A'}
+Description:
+{ticket.description}
+
+Submitted: {submitted_at}
+"""
+        html = f"""
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; background: #0a0b14; color: #e7e9f3; border-radius: 16px; border: 1px solid rgba(255,255,255,0.1);">
+          <div style="display: flex; align-items: center; margin-bottom: 20px; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 16px;">
+            <div style="font-size: 20px; font-weight: 800; color: #ffffff; letter-spacing: -0.5px;">Pocket<span style="color: #6366f1;">Pay</span> <span style="font-size: 13px; font-weight: 600; padding: 3px 8px; border-radius: 6px; background: rgba(99,102,241,0.2); color: #818cf8; margin-left: 8px;">SUPPORT DESK</span></div>
+          </div>
+          
+          <div style="background: rgba(255,255,255,0.04); border-radius: 12px; padding: 20px; border: 1px solid rgba(255,255,255,0.08); margin-bottom: 20px;">
+            <div style="color: #6366f1; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 6px;">NEW SUPPORT TICKET</div>
+            <h2 style="margin: 0 0 14px 0; color: #ffffff; font-size: 18px;">{ticket.subject}</h2>
+            
+            <table style="width: 100%; border-collapse: collapse; font-size: 14px; color: #9aa0b4; margin-bottom: 16px;">
+              <tr><td style="padding: 6px 0; width: 130px; font-weight: 600; color: #6c7289;">Ticket ID:</td><td style="padding: 6px 0; color: #818cf8; font-family: monospace; font-weight: 700;">{ticket.ticket_number}</td></tr>
+              <tr><td style="padding: 6px 0; font-weight: 600; color: #6c7289;">User Name:</td><td style="padding: 6px 0; color: #ffffff;">{ticket.name}</td></tr>
+              <tr><td style="padding: 6px 0; font-weight: 600; color: #6c7289;">Registered Email:</td><td style="padding: 6px 0; color: #ffffff;">{ticket.email}</td></tr>
+              <tr><td style="padding: 6px 0; font-weight: 600; color: #6c7289;">Category:</td><td style="padding: 6px 0; color: #f59e0b;">{ticket.category}</td></tr>
+              <tr><td style="padding: 6px 0; font-weight: 600; color: #6c7289;">Transaction ID:</td><td style="padding: 6px 0; color: #ffffff; font-family: monospace;">{ticket.transaction_id or 'N/A'}</td></tr>
+              <tr><td style="padding: 6px 0; font-weight: 600; color: #6c7289;">Submitted At:</td><td style="padding: 6px 0; color: #9aa0b4;">{submitted_at}</td></tr>
+            </table>
+            
+            <div style="background: rgba(0,0,0,0.3); border-radius: 8px; padding: 14px; border-left: 3px solid #6366f1;">
+              <div style="font-size: 12px; font-weight: 700; color: #6c7289; margin-bottom: 6px; text-transform: uppercase;">User Description:</div>
+              <p style="margin: 0; color: #e7e9f3; font-size: 14px; line-height: 1.6; white-space: pre-wrap;">{ticket.description}</p>
+            </div>
+          </div>
+          
+          <div style="text-align: center; color: #6c7289; font-size: 12px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 16px;">
+            PocketPay Official Support System • Automated Desk Notification
+          </div>
+        </div>
+        """
+        for recipient in SUPPORT_CONTACT_EMAILS:
+            send_email_async(subject, recipient, body=body, html=html)
+        return True
+    except Exception as e:
+        logger.error(f"Failed to dispatch support ticket email: {e}")
+        return False
+
+
+def send_ticket_resolution_email(ticket, admin_response, admin_name="PocketPay Support"):
+    """
+    Sends official admin resolution email to the user when their support ticket is responded to.
+    """
+    try:
+        subject = f"Resolution for Ticket [{ticket.ticket_number}]: {ticket.subject}"
+        resolved_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+        
+        body = f"""Hello {ticket.name},
+
+Your support request ({ticket.ticket_number}) has been reviewed and responded to by our support team.
+
+Subject: {ticket.subject}
+Status: {ticket.status}
+
+Response:
+{admin_response}
+
+If you have further questions, you can reply to this email or submit a follow-up request in the PocketPay app.
+
+PocketPay Support Team
+Helpline: +91 85278 70864 | 8010906123 | +91 92679 32341
+Emails: agarwal.anirudh2006@gmail.com, akshendra.dwivedi1@gmail.com, ankitlawaniya2005@gmail.com
+"""
+        html = f"""
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; background: #0a0b14; color: #e7e9f3; border-radius: 16px; border: 1px solid rgba(255,255,255,0.1);">
+          <div style="display: flex; align-items: center; margin-bottom: 20px; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 16px;">
+            <div style="font-size: 20px; font-weight: 800; color: #ffffff; letter-spacing: -0.5px;">Pocket<span style="color: #6366f1;">Pay</span> <span style="font-size: 13px; font-weight: 600; padding: 3px 8px; border-radius: 6px; background: rgba(16,185,129,0.2); color: #10b981; margin-left: 8px;">OFFICIAL RESOLUTION</span></div>
+          </div>
+          
+          <p style="font-size: 15px; color: #e7e9f3; margin-bottom: 16px;">Hello <b>{ticket.name}</b>,</p>
+          <p style="font-size: 14px; color: #9aa0b4; line-height: 1.5; margin-bottom: 20px;">
+            Your support ticket <b style="color:#818cf8; font-family:monospace;">{ticket.ticket_number}</b> regarding <i>"{ticket.subject}"</i> has been resolved.
+          </p>
+          
+          <div style="background: rgba(16,185,129,0.06); border-radius: 12px; padding: 18px; border: 1px solid rgba(16,185,129,0.25); margin-bottom: 20px;">
+            <div style="font-size: 12px; font-weight: 700; color: #10b981; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 8px;">Support Team Response:</div>
+            <p style="margin: 0; color: #ffffff; font-size: 14px; line-height: 1.6; white-space: pre-wrap;">{admin_response}</p>
+          </div>
+          
+          <div style="background: rgba(255,255,255,0.03); border-radius: 10px; padding: 14px; font-size: 13px; color: #9aa0b4; margin-bottom: 20px;">
+            <div style="font-weight: 700; color: #ffffff; margin-bottom: 4px;">Need additional assistance?</div>
+            📞 <b>Helplines:</b> +91 85278 70864 | 8010906123 | +91 92679 32341<br>
+            📧 <b>Support Emails:</b> agarwal.anirudh2006@gmail.com, akshendra.dwivedi1@gmail.com, ankitlawaniya2005@gmail.com
+          </div>
+          
+          <div style="background: rgba(239,68,68,0.08); border-radius: 8px; padding: 10px 14px; font-size: 12px; color: #fca5a5; border-left: 3px solid #ef4444;">
+            🛡️ <b>Security Reminder:</b> PocketPay Support will never ask for your password, OTP, or transaction PIN.
+          </div>
+          
+          <div style="text-align: center; color: #6c7289; font-size: 12px; margin-top: 20px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 16px;">
+            &copy; {datetime.utcnow().year} PocketPay Inc. All rights reserved.
+          </div>
+        </div>
+        """
+        return send_email_async(subject, ticket.email, body=body, html=html)
+    except Exception as e:
+        logger.error(f"Failed to dispatch resolution email to {ticket.email}: {e}")
+        return False
