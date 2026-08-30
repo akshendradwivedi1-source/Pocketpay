@@ -103,6 +103,97 @@ def get_transaction(tx_id):
     return json_response({'transaction': tx.to_dict(True)})
 
 
+def format_transaction_receipt(tx):
+    sender_name = tx.user.full_name if tx.user else 'PocketPay User'
+    sender_upi = tx.user.virtual_upi_id if tx.user else None
+    
+    recipient_name = tx.merchant or ''
+    recipient_upi = None
+    if tx.extra_data and isinstance(tx.extra_data, dict):
+        recipient_name = tx.extra_data.get('peer_name') or recipient_name
+        recipient_upi = tx.extra_data.get('peer_upi')
+    
+    sender_source = tx.from_pocket.name if tx.from_pocket else 'Wallet Balance'
+    recipient_destination = tx.to_pocket.name if tx.to_pocket else 'PocketPay Wallet'
+    
+    qr_code = None
+    try:
+        qr_code = generate_qr_code(build_qr_tx_url(tx), 250)
+    except Exception:
+        qr_code = None
+
+    return {
+        'transaction_id': tx.transaction_id,
+        'uuid': tx.uuid,
+        'amount': tx.amount,
+        'currency': tx.currency or 'INR',
+        'type': tx.type,
+        'status': tx.status,
+        'sender': {
+            'name': sender_name,
+            'upi_id': sender_upi,
+            'source': sender_source
+        },
+        'recipient': {
+            'name': recipient_name or 'PocketPay Member',
+            'upi_id': recipient_upi,
+            'destination': recipient_destination
+        },
+        'category': tx.category or 'Transfer',
+        'description': tx.description or '',
+        'payment_method': tx.payment_method or 'pocketpay_p2p',
+        'created_at': tx.created_at.isoformat() if tx.created_at else None,
+        'date_formatted': tx.created_at.strftime('%d %b %Y, %I:%M %p UTC') if tx.created_at else 'Recent',
+        'qr_code_url': qr_code or build_qr_tx_url(tx),
+        'receipt_url': build_qr_tx_url(tx),
+        'verified': True
+    }
+
+
+@bp.route('/<string:tx_ref>/receipt', methods=['GET'])
+def get_transaction_receipt(tx_ref):
+    import re
+    clean_ref = re.sub(r'[\x00-\x1f\s]', '', str(tx_ref)).strip()
+    if '/qr/tx/' in clean_ref:
+        clean_ref = clean_ref.split('/qr/tx/')[-1].split('?')[0].split('/')[0]
+    elif 'pocketpay://tx/' in clean_ref:
+        clean_ref = clean_ref.split('pocketpay://tx/')[-1].split('?')[0].split('/')[0]
+        
+    tx = Transaction.query.filter_by(transaction_id=clean_ref).first()
+    if not tx:
+        tx = Transaction.query.filter_by(uuid=clean_ref).first()
+    if not tx and clean_ref.isdigit():
+        tx = Transaction.query.filter_by(id=int(clean_ref)).first()
+        
+    if not tx:
+        return error_response('Transaction receipt not found or invalid reference', 404)
+        
+    return json_response({'receipt': format_transaction_receipt(tx)})
+
+
+@bp.route('/verify-receipt', methods=['POST'])
+def verify_receipt():
+    import re
+    data = request.get_json() or {}
+    ref = data.get('ref') or data.get('content') or data.get('transaction_id') or ''
+    clean_ref = re.sub(r'[\x00-\x1f\s]', '', str(ref)).strip()
+    if '/qr/tx/' in clean_ref:
+        clean_ref = clean_ref.split('/qr/tx/')[-1].split('?')[0].split('/')[0]
+    elif 'pocketpay://tx/' in clean_ref:
+        clean_ref = clean_ref.split('pocketpay://tx/')[-1].split('?')[0].split('/')[0]
+        
+    tx = Transaction.query.filter_by(transaction_id=clean_ref).first()
+    if not tx:
+        tx = Transaction.query.filter_by(uuid=clean_ref).first()
+    if not tx and clean_ref.isdigit():
+        tx = Transaction.query.filter_by(id=int(clean_ref)).first()
+        
+    if not tx:
+        return error_response('Transaction receipt not found or invalid reference', 404)
+        
+    return json_response({'receipt': format_transaction_receipt(tx)})
+
+
 @bp.route('/expense/preview', methods=['POST'])
 @api_login_required
 def preview_expense():

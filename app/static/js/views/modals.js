@@ -2042,6 +2042,21 @@ PP.Modals = {
         payBtn.disabled = true;
         return;
       }
+
+      // Automatically detect and verify Transaction Receipt QR scans
+      if (qrContent.includes('/qr/tx/') || qrContent.startsWith('pocketpay://tx/') || /^(PPT|TX)[0-9A-Za-z]+/i.test(qrContent)) {
+        try {
+          const recRes = await PP.TxAPI.verifyReceipt(qrContent);
+          if (recRes?.data?.receipt) {
+            modal.close();
+            PP.Modals.transactionReceiptModal(recRes.data.receipt);
+            return;
+          }
+        } catch (recErr) {
+          console.debug('[QR Scan] Not a transaction receipt:', recErr);
+        }
+      }
+
       try {
         const res = await PP.PayoutsAPI.parseQR(qrContent);
         parsedRecipient = res?.data?.qr_data;
@@ -2770,67 +2785,94 @@ PP.Modals = {
     PP.refreshIcons();
   },
 
-  transactionDetail(t) {
-    if (!t) return;
-    const isExpense = t.type === 'expense';
-    const isIncome = ['income', 'topup', 'refund'].includes(t.type);
-    const isTransfer = t.type === 'transfer' || t.type === 'withdraw' || t.payment_method === 'bank_transfer';
-    const payout = (t.extra_data && t.extra_data.payout) || {};
-    const qrUrl = t.qr_code_url || (t.transaction_id ? `/api/qr?content=${encodeURIComponent('pocketpay://tx/' + t.transaction_id)}` : null);
+  showTransferReceipt(data = {}) {
+    const t = data.transaction || {};
+    const recipient = data.recipient || {};
+    const amountVal = data.amount || t.amount || 0;
+    const qrUrl = data.receipt_qr || t.qr_code_url || (t.transaction_id ? `/api/qr?content=${encodeURIComponent('pocketpay://tx/' + t.transaction_id)}` : null);
+    const senderSource = data.source_name || (t.from_pocket_id ? 'Funding Pocket' : 'PocketPay Wallet');
+    const recipientDisplay = recipient.full_name || data.resolvedUser?.full_name || t.merchant || 'PocketPay Member';
+    const recipientUpi = recipient.virtual_upi_id || data.resolvedUser?.virtual_upi_id || (t.extra_data?.peer_upi) || '—';
+    const dateStr = t.created_at ? (PP.formatDate ? PP.formatDate(t.created_at, true) : new Date(t.created_at).toLocaleString()) : new Date().toLocaleString();
 
     const modal = PP.UI.modal({
-      title: 'Transaction Receipt',
-      subtitle: `Reference: ${t.transaction_id || '—'}`,
-      icon: isExpense ? 'arrow-up-right' : (isIncome ? 'arrow-down-left' : 'refresh-ccw'),
-      iconClass: isExpense ? 'bg-danger' : (isIncome ? 'bg-success' : 'bg-accent'),
+      title: 'Payment Successful',
+      subtitle: 'Transfer completed & recorded on PocketPay ledger',
+      icon: 'check-circle-2',
+      iconClass: 'bg-success',
       size: 'md'
     });
 
-    const body = PP.el('div', { style: 'display:flex;flex-direction:column;gap:1.15rem' });
+    const body = PP.el('div', { id: 'printableReceiptArea', style: 'display:flex;flex-direction:column;gap:1rem' });
 
-    // Amount & Status Header
+    // Amount & Hero
     body.appendChild(PP.el('div', {
       class: 'glass-card',
-      style: 'text-align:center;padding:1.25rem;background:linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02));border-radius:14px;border:1px solid var(--border)'
+      style: 'text-align:center;padding:1.25rem;background:linear-gradient(180deg, rgba(16,185,129,0.12), rgba(16,185,129,0.02));border:1px solid rgba(16,185,129,0.25);border-radius:16px'
     }, [
-      PP.el('div', { style: 'font-size:0.8rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;font-weight:700' }, [t.type?.toUpperCase() || 'PAYMENT']),
+      PP.el('div', { style: 'font-size:0.8rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;font-weight:700' }, ['SENT TO RECIPIENT']),
       PP.el('div', {
-        style: `font-size:2rem;font-weight:800;font-family:var(--font-display);margin-top:0.25rem;color:${isIncome ? 'var(--success)' : (isExpense ? 'var(--danger)' : 'var(--text)')}`
-      }, [`${isIncome ? '+' : (isExpense ? '-' : '')}${PP.fmt(t.amount)}`]),
-      PP.el('div', { style: 'display:flex;justify-content:center;gap:0.5rem;margin-top:0.5rem' }, [
-        PP.el('span', { class: `chip ${t.status === 'completed' ? 'success' : 'warning'}` }, [t.status?.toUpperCase() || 'COMPLETED']),
-        t.category ? PP.el('span', { class: 'chip accent' }, [t.category]) : null
-      ].filter(Boolean))
+        style: 'font-size:2.2rem;font-weight:800;font-family:var(--font-display);color:var(--success);margin-top:0.25rem'
+      }, [`₹${Number(amountVal).toLocaleString('en-IN', {minimumFractionDigits:2})}`]),
+      PP.el('div', { style: 'display:inline-flex;align-items:center;gap:0.35rem;margin-top:0.4rem;padding:0.25rem 0.75rem;border-radius:9999px;font-size:0.78rem;font-weight:700;background:rgba(16,185,129,0.15);color:#10b981' }, [
+        PP.el('i', { 'data-lucide': 'check-circle-2', style: 'width:14px;height:14px' }),
+        'TRANSFER COMPLETED'
+      ])
     ]));
 
-    // Transfer Receipt QR Code
+    // Transaction Verification QR Card
+    const qrContainer = PP.el('div', {
+      class: 'glass-card',
+      style: 'display:flex;flex-direction:column;align-items:center;padding:1rem;background:#ffffff;border-radius:14px;margin:0 auto;max-width:210px;box-shadow:0 8px 24px rgba(0,0,0,0.35);text-align:center'
+    });
+
     if (qrUrl) {
-      body.appendChild(PP.el('div', {
-        class: 'glass-card',
-        style: 'display:flex;flex-direction:column;align-items:center;padding:1rem;background:#ffffff;border-radius:14px;margin:0 auto;max-width:200px;box-shadow:0 4px 16px rgba(0,0,0,0.3)'
-      }, [
-        PP.el('img', {
-          src: qrUrl,
-          alt: 'Transfer Receipt QR',
-          style: 'width:150px;height:150px;display:block;border-radius:8px'
-        }),
-        PP.el('div', {
-          style: 'font-size:0.72rem;font-weight:700;color:#0a0b14;margin-top:6px;text-align:center'
-        }, ['Scan to Verify Transfer']),
-      ]));
+      qrContainer.innerHTML = `
+        <img src="${qrUrl}" alt="Transaction Receipt QR" style="width:150px;height:150px;display:block;border-radius:8px;object-fit:contain" id="transferReceiptQrImg" />
+        <div style="font-size:0.72rem;font-weight:800;color:#0a0b14;margin-top:6px;letter-spacing:0.02em">
+          Digital Verification QR
+        </div>
+        <div style="font-size:0.65rem;color:#475569;margin-top:2px">
+          Scan with PocketPay to verify
+        </div>
+      `;
+    } else {
+      qrContainer.innerHTML = `
+        <div style="padding:1rem 0.5rem;color:#475569;font-size:0.8rem">
+          <i data-lucide="qr-code" style="width:32px;height:32px;margin:0 auto 0.5rem;color:#94a3b8;display:block"></i>
+          <div>Receipt QR unavailable</div>
+          <button type="button" class="btn btn-sm btn-outline" style="margin-top:0.5rem" id="retryQrBtn">
+            <i data-lucide="refresh-cw"></i> Generate QR
+          </button>
+        </div>
+      `;
+      setTimeout(() => {
+        PP.$('#retryQrBtn', qrContainer)?.addEventListener('click', async () => {
+          try {
+            const genRes = await PP.API.post('/api/qr/generate', { content: `pocketpay://tx/${t.transaction_id}` });
+            if (genRes?.data?.qr_code_url) {
+              qrContainer.innerHTML = `
+                <img src="${genRes.data.qr_code_url}" alt="Transaction Receipt QR" style="width:150px;height:150px;display:block;border-radius:8px" />
+                <div style="font-size:0.72rem;font-weight:800;color:#0a0b14;margin-top:6px">Digital Verification QR</div>
+              `;
+            }
+          } catch {
+            PP.UI.toast('QR Error', 'Could not generate QR code at this time', 'warning');
+          }
+        });
+      }, 50);
     }
+    body.appendChild(qrContainer);
 
     // Detail Rows
     const rows = [
-      { label: 'Date & Time', value: PP.formatDate ? PP.formatDate(t.created_at, true) : String(t.created_at || '') },
-      { label: 'Transaction ID', value: t.transaction_id, copyable: true },
-      t.merchant ? { label: 'Merchant / Recipient', value: t.merchant } : null,
-      payout.bank_name ? { label: 'Bank Name', value: payout.bank_name } : null,
-      payout.account_mask ? { label: 'Account', value: payout.account_mask } : null,
-      payout.utr || t.extra_data?.utr ? { label: 'Bank UTR / Ref', value: payout.utr || t.extra_data?.utr, copyable: true } : null,
-      t.upi_reference ? { label: 'UPI Reference', value: t.upi_reference, copyable: true } : null,
-      t.payment_method ? { label: 'Payment Method', value: t.payment_method?.toUpperCase() } : null,
-      t.description ? { label: 'Description', value: t.description } : null,
+      { label: 'Transaction ID', value: t.transaction_id || '—', copyable: true },
+      { label: 'Date & Time', value: dateStr },
+      { label: 'Sender', value: `${PP.state.user?.full_name || 'You'} (${senderSource})` },
+      { label: 'Recipient', value: `${recipientDisplay} (${recipientUpi})` },
+      { label: 'Payment Method', value: 'PocketPay P2P Transfer' },
+      data.note ? { label: 'Note', value: data.note } : null,
+      data.wallet_balance != null ? { label: 'Updated Wallet Balance', value: `₹${Number(data.wallet_balance).toLocaleString('en-IN', {minimumFractionDigits:2})}` } : null
     ].filter(Boolean);
 
     const detailsWrap = PP.el('div', {
@@ -2842,7 +2884,7 @@ PP.Modals = {
         style: 'display:flex;justify-content:space-between;align-items:center;font-size:0.85rem;padding:0.25rem 0'
       }, [
         PP.el('div', { style: 'color:var(--text-muted)' }, [r.label]),
-        PP.el('div', { style: 'font-weight:600;display:flex;align-items:center;gap:0.35rem' }, [
+        PP.el('div', { style: 'font-weight:600;display:flex;align-items:center;gap:0.35rem;text-align:right' }, [
           PP.el('span', {}, [r.value]),
           r.copyable ? PP.el('button', {
             type: 'button',
@@ -2862,7 +2904,10 @@ PP.Modals = {
     modal.body.appendChild(body);
 
     modal.footer.innerHTML = '';
-    modal.footer.appendChild(PP.el('button', { class: 'btn btn-ghost', onclick: () => modal.close() }, ['Close']));
+    modal.footer.appendChild(PP.el('button', {
+      class: 'btn btn-ghost',
+      onclick: () => modal.close()
+    }, ['Done']));
 
     if (qrUrl) {
       modal.footer.appendChild(PP.el('button', {
@@ -2874,10 +2919,137 @@ PP.Modals = {
           a.click();
           PP.UI.toast('Saved', 'Transfer receipt downloaded', 'success');
         }
-      }, [PP.el('i', { 'data-lucide': 'download' }), 'Save Receipt QR']));
+      }, [PP.el('i', { 'data-lucide': 'download' }), 'Save QR']));
     }
 
+    modal.footer.appendChild(PP.el('button', {
+      class: 'btn btn-primary',
+      onclick: () => {
+        window.print();
+      }
+    }, [PP.el('i', { 'data-lucide': 'printer' }), 'Print Receipt']));
+
     PP.refreshIcons();
+  },
+
+  transactionReceiptModal(r) {
+    if (!r) return;
+    const isIncome = ['income', 'topup', 'peer_receive'].includes(r.type);
+    const isExpense = ['expense', 'peer_send', 'withdraw'].includes(r.type);
+    const qrUrl = r.qr_code_url || (r.transaction_id ? `/api/qr?content=${encodeURIComponent('pocketpay://tx/' + r.transaction_id)}` : null);
+
+    const modal = PP.UI.modal({
+      title: 'Verified Transaction Receipt',
+      subtitle: `Official Reference: ${r.transaction_id || '—'}`,
+      icon: 'shield-check',
+      iconClass: 'bg-success',
+      size: 'md'
+    });
+
+    const body = PP.el('div', { id: 'printableReceiptArea', style: 'display:flex;flex-direction:column;gap:1.15rem' });
+
+    // Header & Verified badge
+    body.appendChild(PP.el('div', {
+      class: 'glass-card',
+      style: 'text-align:center;padding:1.25rem;background:linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02));border-radius:14px;border:1px solid var(--border)'
+    }, [
+      PP.el('div', { style: 'font-size:0.8rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;font-weight:700' }, [r.type?.toUpperCase() || 'PAYMENT']),
+      PP.el('div', {
+        style: `font-size:2rem;font-weight:800;font-family:var(--font-display);margin-top:0.25rem;color:${isIncome ? 'var(--success)' : (isExpense ? 'var(--danger)' : 'var(--text)')}`
+      }, [`${isIncome ? '+' : (isExpense ? '-' : '')}${PP.fmt(r.amount)}`]),
+      PP.el('div', { style: 'display:flex;justify-content:center;gap:0.5rem;margin-top:0.5rem' }, [
+        PP.el('span', { class: `chip ${r.status === 'completed' ? 'success' : 'warning'}` }, [(r.status || 'COMPLETED').toUpperCase()]),
+        PP.el('span', { class: 'chip success' }, [
+          PP.el('i', { 'data-lucide': 'check-circle', style: 'width:12px;height:12px' }),
+          'SERVER VERIFIED'
+        ])
+      ])
+    ]));
+
+    // Transfer Receipt QR Code
+    if (qrUrl) {
+      body.appendChild(PP.el('div', {
+        class: 'glass-card',
+        style: 'display:flex;flex-direction:column;align-items:center;padding:1rem;background:#ffffff;border-radius:14px;margin:0 auto;max-width:200px;box-shadow:0 4px 16px rgba(0,0,0,0.3)'
+      }, [
+        PP.el('img', {
+          src: qrUrl,
+          alt: 'Transfer Receipt QR',
+          style: 'width:150px;height:150px;display:block;border-radius:8px;object-fit:contain'
+        }),
+        PP.el('div', {
+          style: 'font-size:0.72rem;font-weight:700;color:#0a0b14;margin-top:6px;text-align:center'
+        }, ['Official Receipt QR']),
+      ]));
+    }
+
+    // Detail Rows
+    const rows = [
+      { label: 'Transaction ID', value: r.transaction_id, copyable: true },
+      { label: 'Date & Time', value: r.date_formatted || r.created_at || 'Recent' },
+      r.sender?.name ? { label: 'Sender', value: `${r.sender.name} (${r.sender.source || 'Wallet'})` } : null,
+      r.recipient?.name ? { label: 'Recipient', value: `${r.recipient.name} (${r.recipient.destination || 'Wallet'})` } : null,
+      r.merchant ? { label: 'Merchant / Payee', value: r.merchant } : null,
+      r.category ? { label: 'Category', value: r.category } : null,
+      r.payment_method ? { label: 'Payment Method', value: String(r.payment_method).toUpperCase() } : null,
+      r.description ? { label: 'Description', value: r.description } : null,
+    ].filter(Boolean);
+
+    const detailsWrap = PP.el('div', {
+      class: 'glass-card',
+      style: 'padding:0.75rem 1rem;border-radius:12px;display:flex;flex-direction:column;gap:0.6rem;background:rgba(255,255,255,0.02);border:1px solid var(--border)'
+    });
+    rows.forEach(rw => {
+      detailsWrap.appendChild(PP.el('div', {
+        style: 'display:flex;justify-content:space-between;align-items:center;font-size:0.85rem;padding:0.25rem 0'
+      }, [
+        PP.el('div', { style: 'color:var(--text-muted)' }, [rw.label]),
+        PP.el('div', { style: 'font-weight:600;display:flex;align-items:center;gap:0.35rem;text-align:right' }, [
+          PP.el('span', {}, [rw.value]),
+          rw.copyable ? PP.el('button', {
+            type: 'button',
+            class: 'btn-icon',
+            style: 'width:22px;height:22px;padding:2px',
+            onclick: () => {
+              navigator.clipboard?.writeText(rw.value);
+              PP.UI.toast('Copied', `${rw.label} copied to clipboard`, 'info');
+            }
+          }, [PP.el('i', { 'data-lucide': 'copy', style: 'width:12px;height:12px' })]) : null
+        ].filter(Boolean))
+      ]));
+    });
+    body.appendChild(detailsWrap);
+
+    modal.body.innerHTML = '';
+    modal.body.appendChild(body);
+
+    modal.footer.innerHTML = '';
+    modal.footer.appendChild(PP.el('button', { class: 'btn btn-ghost', onclick: () => modal.close() }, ['Close']));
+
+    if (qrUrl) {
+      modal.footer.appendChild(PP.el('button', {
+        class: 'btn btn-outline',
+        onclick: () => {
+          const a = document.createElement('a');
+          a.href = qrUrl;
+          a.download = `PocketPay_Receipt_${r.transaction_id || 'transfer'}.png`;
+          a.click();
+          PP.UI.toast('Saved', 'Transfer receipt downloaded', 'success');
+        }
+      }, [PP.el('i', { 'data-lucide': 'download' }), 'Save QR']));
+    }
+
+    modal.footer.appendChild(PP.el('button', {
+      class: 'btn btn-primary',
+      onclick: () => window.print()
+    }, [PP.el('i', { 'data-lucide': 'printer' }), 'Print Receipt']));
+
+    PP.refreshIcons();
+  },
+
+  transactionDetail(t) {
+    if (!t) return;
+    return this.transactionReceiptModal(t);
   },
 
   // =========================================================================
@@ -3156,20 +3328,18 @@ PP.Modals = {
             PP.renderView?.();
           }
 
-          const recipientDisplay = res.data?.recipient?.full_name || resolvedUser?.full_name || targetIdent;
-          PP.UI.showSuccess({
-            title: 'Money Sent Successfully!',
-            sub: `₹${amountVal.toLocaleString('en-IN', {minimumFractionDigits:2})} transferred to ${recipientDisplay}`,
-            meta: [
-              { label: 'Recipient', value: recipientDisplay },
-              { label: 'Amount', value: `₹${amountVal.toLocaleString('en-IN', {minimumFractionDigits:2})}` },
-              { label: 'Transaction ID', value: res.data?.transaction?.transaction_id || '—' },
-            ]
+          // Render comprehensive Payment Successful Receipt Modal with scannable QR
+          PP.Modals.showTransferReceipt({
+            transaction: res.data?.transaction,
+            recipient: res.data?.recipient,
+            amount: amountVal,
+            wallet_balance: res.data?.wallet_balance,
+            pocket_balance: res.data?.pocket_balance,
+            receipt_qr: res.data?.receipt_qr || res.data?.transaction?.qr_code_url,
+            source_name: selectedSource === 'wallet' ? 'PocketPay Wallet' : (pockets.find(x => String(x.id) === String(selectedSource))?.name || 'Funding Pocket'),
+            note: noteVal,
+            resolvedUser: resolvedUser
           });
-
-          if (res.data?.transaction) {
-            setTimeout(() => PP.Modals.transactionDetail?.(res.data.transaction), 2400);
-          }
         } catch (err) {
           const msg = err.data?.message || err.data?.error || err.message || 'Payment could not be processed';
           PP.UI.toast('Transfer Failed', msg, 'error');

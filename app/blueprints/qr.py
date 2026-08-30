@@ -103,9 +103,25 @@ def qr_transaction_destination(tx_id):
             error_message="The digital transaction receipt you scanned could not be verified."
         ), 404
 
+    from app.utils.helpers import generate_qr_code, build_qr_tx_url
     formatted_date = tx.created_at.strftime('%d %b %Y, %I:%M %p UTC') if tx.created_at else 'Recent'
+    
+    sender_name = tx.user.full_name if tx.user else 'PocketPay User'
+    recipient_name = tx.merchant or ''
+    if tx.extra_data and isinstance(tx.extra_data, dict):
+        recipient_name = tx.extra_data.get('peer_name') or recipient_name
+    
+    sender_source = tx.from_pocket.name if tx.from_pocket else 'Wallet Balance'
+    recipient_destination = tx.to_pocket.name if tx.to_pocket else 'PocketPay Wallet'
+    
+    qr_data_uri = generate_qr_code(build_qr_tx_url(tx), 250)
 
     return render_template('qr/receipt.html',
         tx=tx,
-        formatted_date=formatted_date
+        formatted_date=formatted_date,
+        sender_name=sender_name,
+        recipient_name=recipient_name or 'PocketPay Member',
+        sender_source=sender_source,
+        recipient_destination=recipient_destination,
+        qr_data_uri=qr_data_uri
     )

@@ -169,6 +169,13 @@
       {{ (tx.status or 'COMPLETED').upper() }}
     </div>
 
+    {% if qr_data_uri %}
+    <div style="display:flex;flex-direction:column;align-items:center;padding:0.9rem;background:#ffffff;border-radius:14px;margin:0 auto 1.25rem;max-width:180px;box-shadow:0 8px 24px rgba(0,0,0,0.4)">
+      <img src="{{ qr_data_uri }}" alt="Receipt QR" style="width:140px;height:140px;display:block;border-radius:8px" />
+      <div style="font-size:0.68rem;font-weight:800;color:#0a0b14;margin-top:4px">Official Receipt QR</div>
+    </div>
+    {% endif %}
+
     <div class="receipt-details">
       <div class="receipt-row">
         <span class="receipt-label">Transaction ID:</span>
@@ -179,8 +186,16 @@
         <span class="receipt-value">{{ formatted_date }}</span>
       </div>
       <div class="receipt-row">
-        <span class="receipt-label">Type:</span>
-        <span class="receipt-value">{{ (tx.type or 'Transfer').upper() }}</span>
+        <span class="receipt-label">Sender:</span>
+        <span class="receipt-value">{{ sender_name }} ({{ sender_source }})</span>
+      </div>
+      <div class="receipt-row">
+        <span class="receipt-label">Recipient:</span>
+        <span class="receipt-value">{{ recipient_name }} ({{ recipient_destination }})</span>
+      </div>
+      <div class="receipt-row">
+        <span class="receipt-label">Payment Method:</span>
+        <span class="receipt-value">{{ (tx.payment_method or 'PocketPay P2P').upper() }}</span>
       </div>
       {% if tx.category %}
       <div class="receipt-row">
@@ -188,16 +203,19 @@
         <span class="receipt-value">{{ tx.category }}</span>
       </div>
       {% endif %}
-      {% if tx.reference_number %}
+      {% if tx.description %}
       <div class="receipt-row">
-        <span class="receipt-label">Reference / UTR:</span>
-        <span class="receipt-value">{{ tx.reference_number }}</span>
+        <span class="receipt-label">Note:</span>
+        <span class="receipt-value">{{ tx.description }}</span>
       </div>
       {% endif %}
     </div>
 
     <div class="btn-action-group">
-      <a href="/" class="pocketpay-btn">
+      <button type="button" class="pocketpay-btn" onclick="window.print()" style="cursor:pointer;border:none;width:100%">
+        Print / Save Receipt
+      </button>
+      <a href="/" class="pocketpay-btn" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15)">
         Open in PocketPay Dashboard
       </a>
     </div>

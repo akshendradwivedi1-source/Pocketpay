@@ -743,6 +743,8 @@ PP.TxAPI = {
   },
   search(q) { return PP.API.get('/api/transactions/search', { q }); },
   recurringSuggestions() { return PP.API.get('/api/transactions/recurring/suggestions'); },
+  getReceipt(ref) { return PP.API.get(`/api/transactions/${encodeURIComponent(ref)}/receipt`); },
+  verifyReceipt(content) { return PP.API.post('/api/transactions/verify-receipt', { content }); },
 };
 
 // ========== Analytics ==========
