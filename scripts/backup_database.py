@@ -194,4 +194,9 @@ def run_backup(custom_url: str = None, output_filename: str = None) -> str:
 
 
 if __name__ == '__main__':
-    run_backup()
+    import argparse
+    parser = argparse.ArgumentParser(description="Backup PocketPay PostgreSQL Database")
+    parser.add_argument('--custom-url', '--url', default=None, help="Database URL to backup")
+    parser.add_argument('--output', '-o', default=None, help="Custom output filename")
+    args = parser.parse_args()
+    run_backup(args.custom_url, args.output)
