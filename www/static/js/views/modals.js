@@ -3150,8 +3150,11 @@ PP.Modals = {
           });
 
           modal.close();
-          await PP.loadState?.();
-          PP.renderView?.();
+          if (PP.bootstrap) {
+            try { await PP.bootstrap(true); } catch {}
+          } else {
+            PP.renderView?.();
+          }
 
           const recipientDisplay = res.data?.recipient?.full_name || resolvedUser?.full_name || targetIdent;
           PP.UI.showSuccess({
@@ -3168,7 +3171,8 @@ PP.Modals = {
             setTimeout(() => PP.Modals.transactionDetail?.(res.data.transaction), 2400);
           }
         } catch (err) {
-          PP.UI.toast('Transfer Failed', err.message || 'Payment could not be processed', 'error');
+          const msg = err.data?.message || err.data?.error || err.message || 'Payment could not be processed';
+          PP.UI.toast('Transfer Failed', msg, 'error');
         } finally {
           isSubmitting = false;
           submitBtn.disabled = false;

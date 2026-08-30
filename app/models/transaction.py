@@ -58,8 +58,8 @@ class Transaction(db.Model):
     merchant = db.Column(db.String(255), nullable=True)
     description = db.Column(db.Text, nullable=True)
     
-    payment_method = db.Column(db.String(50), default='wallet')
-    qr_code_url = db.Column(db.String(500), nullable=True)
+    payment_method = db.Column(db.String(500), default='wallet')
+    qr_code_url = db.Column(db.Text, nullable=True)
     upi_reference = db.Column(db.String(100), nullable=True)
     
     latitude = db.Column(db.Float, nullable=True)

@@ -115,6 +115,15 @@ def create_app(config_name=None):
                             conn.execute(text(f"ALTER TABLE telegram_users ADD COLUMN notifications_enabled {bool_true}"))
                     except Exception:
                         pass
+
+            if 'transactions' in tables:
+                tx_columns = [c['name'] for c in inspector.get_columns('transactions')]
+                if is_postgres and 'qr_code_url' in tx_columns:
+                    try:
+                        with db.engine.begin() as conn:
+                            conn.execute(text("ALTER TABLE transactions ALTER COLUMN qr_code_url TYPE TEXT"))
+                    except Exception:
+                        pass
         except Exception as e:
             app.logger.debug(f"[Schema Sync Exception] {e}")
 

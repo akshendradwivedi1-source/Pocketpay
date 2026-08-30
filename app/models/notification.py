@@ -46,7 +46,7 @@ class Notification(db.Model):
         }
     
     @staticmethod
-    def create(user_id, title, message, notif_type='info', priority='normal', **kwargs):
+    def create(user_id, title, message, notif_type='info', priority='normal', commit=True, **kwargs):
         notif = Notification(
             user_id=user_id,
             title=title,
@@ -56,7 +56,8 @@ class Notification(db.Model):
             **kwargs
         )
         db.session.add(notif)
-        db.session.commit()
+        if commit:
+            db.session.commit()
         
         try:
             from app.models.user import User
@@ -98,7 +99,7 @@ class Notification(db.Model):
                                    pocket_id=pocket.id)
     
     @staticmethod
-    def transaction_alert(user_id, transaction):
+    def transaction_alert(user_id, transaction, commit=True):
         if transaction.type == 'expense':
             title = 'Payment Made'
             pocket = transaction.from_pocket
@@ -114,4 +115,5 @@ class Notification(db.Model):
             title = 'Transaction Complete'
             message = f'₹{transaction.amount:.2f} {transaction.type}'
         return Notification.create(user_id, title, message, 'success', 'normal',
+                                   commit=commit,
                                    transaction_id=transaction.id)

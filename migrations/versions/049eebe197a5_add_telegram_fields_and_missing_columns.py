@@ -70,6 +70,11 @@ def upgrade():
         except Exception:
             pass
 
+    # 3. Ensure transactions qr_code_url is Text
+    if 'transactions' in tables:
+        with op.batch_alter_table('transactions', schema=None) as batch_op:
+            batch_op.alter_column('qr_code_url', existing_type=sa.String(length=500), type_=sa.Text(), existing_nullable=True)
+
 
 def downgrade():
     conn = op.get_bind()

@@ -763,7 +763,7 @@ def send_money():
                 'is_p2p': True
             }
         )
-        tx_sender.qr_code_url = generate_qr_code(build_qr_tx_url(tx_sender), 250)
+        tx_sender.qr_code_url = build_qr_tx_url(tx_sender)
         db.session.add(tx_sender)
         tx_sender.complete()
         
@@ -784,30 +784,35 @@ def send_money():
                 'is_p2p': True
             }
         )
-        tx_recipient.qr_code_url = generate_qr_code(build_qr_tx_url(tx_recipient), 250)
+        tx_recipient.qr_code_url = build_qr_tx_url(tx_recipient)
         db.session.add(tx_recipient)
         tx_recipient.complete()
         
-        # Notifications
-        Notification.transaction_alert(current_user.id, tx_sender)
+        # Notifications (staged without immediate commit)
+        Notification.transaction_alert(current_user.id, tx_sender, commit=False)
         Notification.create(
             current_user.id,
             'Money Sent',
             f'₹{amount:,.2f} sent to {recipient.full_name} ({recipient.virtual_upi_id or recipient.email}).',
             'success',
-            'high'
+            'high',
+            commit=False
         )
         
-        Notification.transaction_alert(recipient.id, tx_recipient)
+        Notification.transaction_alert(recipient.id, tx_recipient, commit=False)
         Notification.create(
             recipient.id,
             'Money Received! 💰',
             f'You received ₹{amount:,.2f} from {current_user.full_name} ({current_user.virtual_upi_id or current_user.email}).',
             'success',
-            'high'
+            'high',
+            commit=False
         )
         
         db.session.commit()
+
+        # Generate base64 QR for receipt display in response
+        receipt_qr = generate_qr_code(build_qr_tx_url(tx_sender), 250) or tx_sender.qr_code_url
 
         # Instant Telegram notification dispatch (non-blocking / safe)
         try:
@@ -816,7 +821,7 @@ def send_money():
                 TelegramService.send_event_notification(
                     recipient,
                     "Money Received! 💰",
-                    f"You received <b>₹{amount:,.2f}</b> from <b>{current_user.full_name}</b> ({current_user.virtual_upi_id or current_user.email}).\n\n<i>Note: {note}</i>",
+                    f"You received <b>₹{amount:,.2f}</b> from <b>{current_user.full_name}</b> ({recipient.virtual_upi_id or recipient.email}).\n\n<i>Note: {note}</i>",
                     "success"
                 )
                 TelegramService.send_event_notification(
@@ -837,7 +842,7 @@ def send_money():
             },
             'wallet_balance': current_user.wallet_balance,
             'pocket_balance': source_pocket.current_balance if source_pocket else None,
-            'receipt_qr': tx_sender.qr_code_url
+            'receipt_qr': receipt_qr
         }, f'₹{amount:,.2f} sent successfully to {recipient.full_name}', 201)
 
     except Exception as e:
@@ -1004,7 +1009,7 @@ def pay_money_request(req_id):
         payment_method='pocketpay_p2p',
         extra_data={'request_id': req.id, 'peer_user_id': requester.id}
     )
-    tx_sender.qr_code_url = generate_qr_code(build_qr_tx_url(tx_sender), 250)
+    tx_sender.qr_code_url = build_qr_tx_url(tx_sender)
     db.session.add(tx_sender)
     tx_sender.complete()
     
@@ -1020,7 +1025,7 @@ def pay_money_request(req_id):
         payment_method='pocketpay_p2p',
         extra_data={'request_id': req.id, 'peer_user_id': current_user.id}
     )
-    tx_requester.qr_code_url = generate_qr_code(build_qr_tx_url(tx_requester), 250)
+    tx_requester.qr_code_url = build_qr_tx_url(tx_requester)
     db.session.add(tx_requester)
     tx_requester.complete()
     
@@ -1029,31 +1034,35 @@ def pay_money_request(req_id):
     req.responded_at = datetime.utcnow()
     req.transaction_id = tx_sender.transaction_id
     
-    Notification.transaction_alert(current_user.id, tx_sender)
+    Notification.transaction_alert(current_user.id, tx_sender, commit=False)
     Notification.create(
         current_user.id,
         'Request Paid',
         f'You paid ₹{amount:,.2f} to {requester.full_name}.',
         'success',
-        'high'
+        'high',
+        commit=False
     )
     
-    Notification.transaction_alert(requester.id, tx_requester)
+    Notification.transaction_alert(requester.id, tx_requester, commit=False)
     Notification.create(
         requester.id,
         'Money Request Paid! 💰',
         f'{current_user.full_name} accepted and paid your request for ₹{amount:,.2f}.',
         'success',
-        'high'
+        'high',
+        commit=False
     )
     
     db.session.commit()
+
+    receipt_qr = generate_qr_code(build_qr_tx_url(tx_sender), 250) or tx_sender.qr_code_url
     
     return json_response({
         'request': req.to_dict(),
         'transaction': tx_sender.to_dict(True),
         'wallet_balance': current_user.wallet_balance,
-        'receipt_qr': tx_sender.qr_code_url
+        'receipt_qr': receipt_qr
     }, f'₹{amount:,.2f} paid successfully to {requester.full_name}')
 
 
