@@ -1143,14 +1143,31 @@ PP.Modals = {
     });
 
     let phoneVal = user.phone || '';
-    let otpVal = '';
-    let step = user.phone ? 2 : 1; // Step 1: Enter Phone, Step 2: Enter OTP
+    let otpVal = '', shownOtp = '';
+    let step = 1; // Always start at step 1 so user can confirm/edit their phone number
     let isSubmitting = false;
 
     const render = () => {
       const body = PP.el('div', { style: 'display:flex;flex-direction:column;gap:1.25rem' });
 
+      // Stepper
+      body.appendChild(PP.el('div', { style: 'display:flex;align-items:center;gap:0;margin-bottom:0.25rem' }, [
+        PP.el('div', { style: `display:flex;align-items:center;gap:6px;font-size:0.78rem;font-weight:700;color:${step===1?'var(--accent)':'var(--text-muted)'}` }, [
+          PP.el('div', { style: `width:22px;height:22px;border-radius:50%;background:${step===1?'var(--accent)':'rgba(99,102,241,0.2)'};color:#fff;display:flex;align-items:center;justify-content:center;font-size:0.72rem;font-weight:800` }, ['1']),
+          'Enter Number'
+        ]),
+        PP.el('div', { style: 'flex:1;height:2px;background:rgba(99,102,241,0.2);margin:0 8px' }),
+        PP.el('div', { style: `display:flex;align-items:center;gap:6px;font-size:0.78rem;font-weight:700;color:${step===2?'var(--accent)':'var(--text-muted)'}` }, [
+          PP.el('div', { style: `width:22px;height:22px;border-radius:50%;background:${step===2?'var(--accent)':'rgba(99,102,241,0.2)'};color:#fff;display:flex;align-items:center;justify-content:center;font-size:0.72rem;font-weight:800` }, ['2']),
+          'Verify OTP'
+        ]),
+      ]));
+
       if (step === 1) {
+        body.appendChild(PP.el('div', { style: 'font-size:0.83rem;color:var(--text-muted);background:rgba(99,102,241,0.07);border-radius:10px;padding:0.65rem 0.9rem;border-left:3px solid var(--accent)' }, [
+          '📲 Enter your mobile number below. A 6-digit verification code will appear right here in the app.'
+        ]));
+
         body.appendChild(PP.el('div', { class: 'form-group' }, [
           PP.el('label', { class: 'form-label' }, ['Mobile Phone Number']),
           (() => {
@@ -1159,12 +1176,14 @@ PP.Modals = {
               class: 'form-input',
               placeholder: '+91 9876543210',
               value: phoneVal,
-              maxlength: 16
+              maxlength: 16,
+              style: 'font-size:1.05rem;letter-spacing:0.05em'
             });
             inp.oninput = (e) => phoneVal = e.target.value;
+            setTimeout(() => { try { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); } catch {} }, 80);
             return inp;
           })(),
-          PP.el('div', { style: 'font-size:0.75rem;color:var(--text-muted);margin-top:0.35rem' }, ['Include country code, e.g. +91'])
+          PP.el('div', { style: 'font-size:0.72rem;color:var(--text-muted);margin-top:0.35rem' }, ['Include country code — e.g. +91 for India'])
         ]));
 
         modal.body.innerHTML = '';
@@ -1174,10 +1193,14 @@ PP.Modals = {
         modal.footer.appendChild(PP.el('button', { class: 'btn btn-ghost', onclick: () => modal.close() }, ['Cancel']));
         modal.footer.appendChild(PP.el('button', {
           class: 'btn btn-primary',
-          onclick: async () => {
+          onclick: async (e) => {
+            const btn = e.currentTarget;
             if (!phoneVal || phoneVal.replace(/[^0-9]/g, '').length < 10) {
-              return PP.UI.toast('Invalid Phone', 'Please enter a valid 10-digit phone number', 'warning');
+              return PP.UI.toast('Invalid Phone', 'Please enter a valid 10-digit phone number including country code', 'warning');
             }
+            btn.disabled = true;
+            btn.innerHTML = '<i data-lucide="loader-2" style="animation:slowSpin 1s linear infinite;width:16px;height:16px"></i> Sending…';
+            PP.refreshIcons();
             try {
               const res = await PP.Auth.sendPhoneOtp(phoneVal);
               if (res.data?.simulated_otp) shownOtp = res.data.simulated_otp;
@@ -1185,6 +1208,8 @@ PP.Modals = {
               render();
             } catch (e) {
               PP.UI.toast('Error', e.message || 'Could not send OTP', 'error');
+              btn.disabled = false;
+              btn.innerHTML = 'Send Verification OTP';
             }
           }
         }, ['Send Verification OTP']));
