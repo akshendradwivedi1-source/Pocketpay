@@ -111,6 +111,27 @@ python scratch/test_production_readiness.py
 
 ---
 
+## 💾 Database Backup & Render PostgreSQL Migration
+
+PocketPay includes tools for creating self-contained PostgreSQL database backups and migrating across Render PostgreSQL database instances without data loss:
+
+* **Full Guide**: See [DATABASE_BACKUP_AND_MIGRATION.md](file:///c:/Users/arvin/OneDrive/Desktop/Pocketpay/docs/DATABASE_BACKUP_AND_MIGRATION.md) for step-by-step instructions.
+* **Create Backup**:
+  ```bash
+  python scripts/backup_database.py
+  # Saves to PocketPay/backups/pocketpay_backup_YYYY-MM-DD_HH-MM-SS.sql
+  ```
+* **Restore to New Database**:
+  ```bash
+  python scripts/restore_database.py --target-url "<NEW_RENDER_POSTGRESQL_URL>"
+  ```
+* **Verify Database Integrity**:
+  ```bash
+  python scripts/verify_database.py "<NEW_RENDER_POSTGRESQL_URL>"
+  ```
+
+---
+
 ## 📄 License
 
 This project is licensed under the MIT License.

@@ -64,6 +64,11 @@ instance/
 *.sqlite
 *.sqlite3
 
+# Database Backups & Dumps (CRITICAL: Contains Production Data)
+backups/
+*.sql
+*.dump
+
 # Logs & Temporary Scratch Files
 *.log
 logs/

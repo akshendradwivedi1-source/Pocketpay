@@ -632,17 +632,106 @@ def search_user():
     email_parts = target.email.split('@')
     masked_email = email_parts[0][0] + '***@' + email_parts[1] if len(email_parts) == 2 else target.email
     
+    if not target.is_active:
+        return error_response('User account is inactive or suspended', 400, code='USER_INACTIVE')
+
     return json_response({
         'found': True,
+        'verified': True,
         'user': {
             'id': target.id,
             'full_name': target.full_name,
             'masked_email': masked_email,
             'virtual_upi_id': target.virtual_upi_id,
             'virtual_wallet_id': target.virtual_wallet_id,
-            'avatar_url': target.avatar_url
+            'avatar_url': target.avatar_url,
+            'is_active': target.is_active
         }
     })
+
+
+@bp.route('/verify-wallet-id', methods=['POST', 'GET'])
+@api_login_required
+def verify_wallet_id():
+    """
+    Secure server-side verification for PocketPay Wallet IDs / Identifiers.
+    Checks existence, user existence, wallet active status, and disallows self-transfers.
+    """
+    if request.method == 'GET':
+        wallet_id = request.args.get('wallet_id') or request.args.get('id') or request.args.get('q') or ''
+    else:
+        data = request.get_json(silent=True) or {}
+        wallet_id = data.get('wallet_id') or data.get('recipient') or data.get('id') or ''
+        
+    clean_id = str(wallet_id).strip()
+    if not clean_id:
+        return error_response('PocketPay Wallet ID is required', 400, code='WALLET_ID_REQUIRED')
+
+    clean_q = clean_id.lower()
+    clean_phone = re.sub(r'[\s\-]', '', clean_id)
+    phone_candidates = list({
+        clean_id,
+        clean_phone,
+        '+' + clean_phone if not clean_phone.startswith('+') else clean_phone,
+        clean_phone.lstrip('+'),
+        '+91' + clean_phone.lstrip('+') if len(clean_phone.lstrip('+')) == 10 else clean_phone
+    })
+
+    target = User.query.filter(
+        (User.virtual_wallet_id == clean_id.upper()) |
+        (User.virtual_upi_id == clean_q) |
+        (User.email == clean_q) |
+        (User.phone.in_(phone_candidates))
+    ).first()
+
+    if not target:
+        return error_response('PocketPay Wallet ID not found', 404, code='WALLET_NOT_FOUND')
+
+    if target.id == current_user.id:
+        return error_response('Cannot transfer or send money to your own wallet', 400, code='SELF_TRANSFER_DISALLOWED')
+
+    if not target.is_active:
+        return error_response('PocketPay Wallet account is inactive or suspended', 400, code='WALLET_INACTIVE')
+
+    email_parts = target.email.split('@')
+    masked_email = email_parts[0][0] + '***@' + email_parts[1] if len(email_parts) == 2 else target.email
+
+    return json_response({
+        'valid': True,
+        'verified': True,
+        'status': 'active',
+        'verification_type': 'pocketpay_wallet',
+        'recipient': {
+            'id': target.id,
+            'full_name': target.full_name,
+            'virtual_wallet_id': target.virtual_wallet_id,
+            'virtual_upi_id': target.virtual_upi_id,
+            'masked_email': masked_email,
+            'is_active': target.is_active,
+            'verified_badge': True
+        }
+    }, 'PocketPay Wallet ID verified successfully')
+
+
+@bp.route('/verify-upi', methods=['POST'])
+@api_login_required
+def verify_upi_id_endpoint():
+    """
+    Dedicated endpoint to verify any external UPI ID / VPA.
+    Runs format validation, handles @pocketpay virtual VPAs, and invokes provider/mock verification.
+    """
+    data = request.get_json() or {}
+    vpa = str(data.get('upi_id') or data.get('vpa') or data.get('recipient') or '').strip()
+    if not vpa:
+        return error_response('UPI ID / VPA is required', 400, code='UPI_ID_REQUIRED')
+
+    from app.services.upi_verification_service import UPIVerificationService
+    result = UPIVerificationService.verify_vpa(vpa)
+
+    if not result.get('valid'):
+        return error_response(result.get('error', 'Invalid UPI ID'), 400, **result)
+
+    return json_response(result, result.get('message', 'UPI ID verified successfully'))
 
 
 @bp.route('/send-money', methods=['POST'])
@@ -714,6 +803,9 @@ def send_money():
         
     if recipient.id == current_user.id:
         return error_response('Cannot send money to your own account', 400)
+
+    if not recipient.is_active:
+        return error_response('Recipient account is inactive or suspended', 400, code='RECIPIENT_INACTIVE')
         
     pocket_raw = data.get('pocket_id')
     pocket_id = None

@@ -3339,34 +3339,36 @@ PP.Modals = {
           style: 'font-size:0.8rem;color:var(--accent);display:flex;align-items:center;gap:0.4rem;margin-top:0.4rem'
         }, [
           PP.el('i', { 'data-lucide': 'loader-2', style: 'width:14px;height:14px;animation:slowSpin 1s linear infinite' }),
-          'Searching PocketPay network…'
+          'Verifying recipient with PocketPay server…'
         ]));
       } else if (resolvedUser) {
+        const isInternal = Boolean(resolvedUser.virtual_wallet_id || resolvedUser.id);
         searchStatusEl.appendChild(PP.el('div', {
           class: 'glass-card',
-          style: 'display:flex;align-items:center;gap:0.75rem;padding:0.75rem 1rem;background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.25);border-radius:12px;margin-top:0.5rem'
+          style: 'display:flex;align-items:center;gap:0.75rem;padding:0.85rem 1rem;background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.3);border-radius:12px;margin-top:0.5rem'
         }, [
           PP.el('div', {
             class: 'avatar gradient-avatar',
-            style: 'width:38px;height:38px;font-size:1rem;flex-shrink:0'
-          }, [resolvedUser.full_name?.charAt(0)?.toUpperCase() || 'U']),
+            style: 'width:40px;height:40px;font-size:1rem;flex-shrink:0;background:linear-gradient(135deg,#10b981,#059669);color:#fff'
+          }, [resolvedUser.full_name?.charAt(0)?.toUpperCase() || (isInternal ? 'P' : 'U')]),
           PP.el('div', { style: 'flex:1;min-width:0' }, [
-            PP.el('div', { style: 'font-weight:700;font-size:0.95rem;color:var(--text)' }, [resolvedUser.full_name]),
-            PP.el('div', { style: 'font-size:0.78rem;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis' }, [
-              resolvedUser.virtual_upi_id || resolvedUser.masked_email
+            PP.el('div', { style: 'font-weight:700;font-size:0.95rem;color:#fff' }, [resolvedUser.full_name || resolvedUser.recipient_name || 'Verified Recipient']),
+            PP.el('div', { style: 'font-size:0.78rem;color:var(--text-muted);font-family:monospace;overflow:hidden;text-overflow:ellipsis' }, [
+              resolvedUser.virtual_wallet_id ? `ID: ${resolvedUser.virtual_wallet_id} • ${resolvedUser.virtual_upi_id || resolvedUser.masked_email}` : (resolvedUser.vpa || resolvedUser.virtual_upi_id || '')
             ])
           ]),
-          PP.el('span', { class: 'chip success' }, [
+          PP.el('span', { class: 'chip success', style: 'display:inline-flex;align-items:center;gap:4px;font-size:0.72rem;padding:3px 8px' }, [
             PP.el('i', { 'data-lucide': 'check-circle-2', style: 'width:12px;height:12px' }),
-            'Verified User'
+            resolvedUser.is_mock ? 'Sandbox Verified' : 'Verified'
           ])
         ]));
       } else if (searchError && recipientInput.trim().length >= 2) {
         searchStatusEl.appendChild(PP.el('div', {
-          style: 'font-size:0.8rem;color:var(--danger);display:flex;align-items:center;gap:0.4rem;margin-top:0.4rem'
+          class: 'glass-card',
+          style: 'font-size:0.82rem;color:var(--danger);display:flex;align-items:center;gap:0.5rem;margin-top:0.5rem;padding:0.6rem 0.85rem;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.25);border-radius:10px'
         }, [
-          PP.el('i', { 'data-lucide': 'alert-circle', style: 'width:14px;height:14px' }),
-          searchError
+          PP.el('i', { 'data-lucide': 'alert-circle', style: 'width:15px;height:15px;flex-shrink:0' }),
+          PP.el('span', {}, [searchError])
         ]));
       }
       PP.refreshIcons();
@@ -3384,13 +3386,53 @@ PP.Modals = {
       searching = true;
       searchError = '';
       updateStatus();
+
       try {
-        const res = await PP.WalletAPI.searchUser(q);
-        resolvedUser = res.data?.user || null;
-        searchError = '';
+        // 1. Try PocketPay Wallet ID / user search first
+        let res = null;
+        try {
+          res = await PP.WalletAPI.verifyWalletId(q);
+          if (res?.data?.recipient) {
+            resolvedUser = res.data.recipient;
+            searchError = '';
+            searching = false;
+            updateStatus();
+            return;
+          }
+        } catch (wErr) {
+          // If query looks like an external UPI VPA (e.g. user@bank), verify via UPI service
+          if (q.includes('@') && !q.toLowerCase().endsWith('@pocketpay')) {
+            try {
+              const upiRes = await PP.WalletAPI.verifyUpi(q);
+              if (upiRes?.data?.valid) {
+                resolvedUser = {
+                  full_name: upiRes.data.recipient_name,
+                  vpa: upiRes.data.vpa,
+                  virtual_upi_id: upiRes.data.vpa,
+                  is_mock: upiRes.data.is_mock,
+                  status: upiRes.data.verification_status
+                };
+                searchError = '';
+                searching = false;
+                updateStatus();
+                return;
+              } else {
+                throw new Error(upiRes?.data?.error || 'Invalid or unverified UPI ID');
+              }
+            } catch (uErr) {
+              resolvedUser = null;
+              searchError = uErr.message || 'UPI ID could not be verified';
+              searching = false;
+              updateStatus();
+              return;
+            }
+          }
+          resolvedUser = null;
+          searchError = wErr.message || 'PocketPay Wallet ID not found or inactive';
+        }
       } catch (err) {
         resolvedUser = null;
-        searchError = err.message || 'User not found';
+        searchError = err.message || 'Verification failed';
       } finally {
         searching = false;
         updateStatus();
@@ -3401,7 +3443,7 @@ PP.Modals = {
     const recipientInp = PP.el('input', {
       class: 'form-input',
       id: 'sendMoneyRecipientInput',
-      placeholder: 'e.g. arjun@pocketpay.app, +919876543210, user@pocketpay',
+      placeholder: 'e.g. WAL_ALICE01, PPW001, arjun@pocketpay, user@bank',
       value: recipientInput
     });
     recipientInp.oninput = (e) => {

@@ -678,6 +678,8 @@ PP.WalletAPI = {
   deleteRule(id) { return PP.API.delete(`/api/wallet/rules/${id}`); },
   categories() { return PP.API.get('/api/wallet/categories'); },
   searchUser(q) { return PP.API.get('/api/wallet/search-user', { q }); },
+  verifyWalletId(wallet_id) { return PP.API.post('/api/wallet/verify-wallet-id', { wallet_id }); },
+  verifyUpi(upi_id) { return PP.API.post('/api/wallet/verify-upi', { upi_id }); },
   sendMoney(payload) {
     const pin = payload.pin;
     const pinStr = typeof pin === 'object' && pin !== null ? pin.pin : String(pin || '');
