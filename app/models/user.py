@@ -70,6 +70,10 @@ class User(UserMixin, db.Model):
     
     transfer_frozen = db.Column(db.Boolean, default=False)
     transaction_limit = db.Column(db.Float, default=100000.0)
+    
+    # Payment Approval Mode (Part 2 - Premium Feature)
+    require_payment_approval = db.Column(db.Boolean, default=False)
+    payment_approval_threshold = db.Column(db.Numeric(12, 2, asdecimal=False), default=5000.0)
 
     pockets = db.relationship('Pocket', back_populates='user', cascade='all, delete-orphan', lazy='dynamic')
     transactions = db.relationship('Transaction', back_populates='user', cascade='all, delete-orphan', lazy='dynamic')
@@ -476,6 +480,8 @@ class User(UserMixin, db.Model):
             'email_verified': self.email_verified,
             'phone_verified': self.phone_verified,
             'is_premium': self.is_premium_active,
+            'require_payment_approval': bool(getattr(self, 'require_payment_approval', False)),
+            'payment_approval_threshold': float(getattr(self, 'payment_approval_threshold', 5000.0) or 5000.0),
             'subscription_status': self.current_subscription.status if self.current_subscription else ('ACTIVE' if self.is_premium else 'NONE'),
             'subscription': self.current_subscription.to_dict() if self.current_subscription else None,
             'transfer_frozen': bool(getattr(self, 'transfer_frozen', False)),

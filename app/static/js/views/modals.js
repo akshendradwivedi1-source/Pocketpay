@@ -837,7 +837,46 @@ PP.Modals = {
               PP.emit('pockets:changed');
               PP.refreshCurrentView();
             } catch (err) {
-              PP.UI.toast('Payment Failed', err.message || 'Could not complete pocket payment', 'error');
+              if (err.code === 'PAYMENT_APPROVAL_REQUIRED') {
+                const confirmed = await PP.UI.confirm(
+                  '⚠️ High-Value Payment Confirmation',
+                  `Payment of ₹${amount:,.2f} exceeds your security threshold. Additional confirmation is required. Proceed with transfer?`,
+                  { okLabel: 'Authorize & Pay', okClass: 'btn-danger' }
+                );
+                if (confirmed) {
+                  try {
+                    const retryRes = await PP.API.post('/api/transactions/pay-pocket', {
+                      pocket_id: pocket.id,
+                      amount: amount,
+                      recipient: recipient,
+                      note: note,
+                      pin: pin,
+                      approval_confirmed: true
+                    });
+                    modal.close();
+                    PP.UI.showSuccess({
+                      title: 'Payment Successful! 🎉',
+                      subtitle: `₹${PP.fmt(amount).replace('₹', '')} debited from ${pocket.name}`,
+                      qr_code_url: retryRes?.data?.receipt_qr,
+                      meta: [
+                        { label: 'Recipient', value: recipient },
+                        { label: 'Source Pocket', value: pocket.name },
+                        { label: 'Amount Paid', value: `₹${PP.fmt(amount).replace('₹', '')}` },
+                        { label: 'Remaining in Pocket', value: `₹${PP.fmt(retryRes?.data?.remaining_balance || remaining).replace('₹', '')}` }
+                      ]
+                    });
+                    opts.onDone?.();
+                    PP.emit('transactions:changed');
+                    PP.emit('pockets:changed');
+                    PP.refreshCurrentView();
+                    return;
+                  } catch (retryErr) {
+                    PP.UI.toast('Payment Failed', retryErr.message || 'Payment could not be completed', 'error');
+                  }
+                }
+              } else {
+                PP.UI.toast('Payment Failed', err.message || 'Could not complete pocket payment', 'error');
+              }
               payBtn.disabled = false;
               payBtn.innerHTML = '<i data-lucide="lock"></i> Confirm & Pay';
               PP.refreshIcons();
@@ -1013,7 +1052,43 @@ PP.Modals = {
               PP.emit('transactions:changed');
               PP.refreshCurrentView();
             } catch (err) {
-              PP.UI.toast('Payment Failed', err.message || 'Could not complete payment', 'error');
+              if (err.code === 'PAYMENT_APPROVAL_REQUIRED') {
+                const confirmed = await PP.UI.confirm(
+                  '⚠️ High-Value Payment Confirmation',
+                  `Payment of ₹${amount:,.2f} exceeds your security threshold. Additional confirmation is required. Proceed with transfer?`,
+                  { okLabel: 'Authorize & Pay', okClass: 'btn-danger' }
+                );
+                if (confirmed) {
+                  try {
+                    const retryRes = await PP.API.post('/api/transactions/pay-balance', {
+                      amount: amount,
+                      recipient: recipient,
+                      note: note,
+                      pin: pin,
+                      approval_confirmed: true
+                    });
+                    modal.close();
+                    PP.UI.showSuccess({
+                      title: 'Payment Successful! 🎉',
+                      subtitle: `₹${PP.fmt(amount).replace('₹', '')} paid from PocketPay Balance`,
+                      qr_code_url: retryRes?.data?.receipt_qr,
+                      meta: [
+                        { label: 'Recipient', value: recipient },
+                        { label: 'Amount', value: `₹${PP.fmt(amount).replace('₹', '')}` },
+                        { label: 'Remaining Balance', value: `₹${PP.fmt(retryRes?.data?.remaining_balance || remaining).replace('₹', '')}` }
+                      ]
+                    });
+                    opts.onDone?.();
+                    PP.emit('transactions:changed');
+                    PP.refreshCurrentView();
+                    return;
+                  } catch (retryErr) {
+                    PP.UI.toast('Payment Failed', retryErr.message || 'Payment could not be completed', 'error');
+                  }
+                }
+              } else {
+                PP.UI.toast('Payment Failed', err.message || 'Could not complete payment', 'error');
+              }
               payBtn.disabled = false;
               payBtn.innerHTML = '<i data-lucide="lock"></i> Confirm & Pay';
               PP.refreshIcons();

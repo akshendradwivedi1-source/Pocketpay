@@ -838,4 +838,44 @@ PP.QRAPI = {
   }
 };
 
+// ========== PocketPay Premium Suite API ==========
+PP.PremiumAPI = {
+  getStatus() { return PP.API.get('/api/premium/status'); },
+  getPlans() { return PP.API.get('/api/premium/plans'); },
+  createCheckoutOrder(plan_id = 'monthly') {
+    return PP.API.post('/api/premium/create-checkout-order', { plan_id });
+  },
+  verifyPayment(payload) {
+    return PP.API.post('/api/premium/verify-payment', payload);
+  },
+  cancel() {
+    return PP.API.post('/api/premium/cancel', {});
+  },
+  // Rules
+  getRules() { return PP.API.get('/api/premium/rules'); },
+  createRule(payload) { return PP.API.post('/api/premium/rules', payload); },
+  updateRule(id, payload) { return PP.API.put(`/api/premium/rules/${id}`, payload); },
+  deleteRule(id) { return PP.API.delete(`/api/premium/rules/${id}`); },
+  toggleRule(id, is_active) { return PP.API.post(`/api/premium/rules/${id}/toggle`, { is_active }); },
+  getRuleHistory(rule_id) { return PP.API.get('/api/premium/rules/history', rule_id ? { rule_id } : undefined); },
+  // Pocket Lock
+  lockPocket(pocket_id, payload) { return PP.API.post(`/api/premium/pockets/${pocket_id}/lock`, payload); },
+  unlockPocket(pocket_id) { return PP.API.post(`/api/premium/pockets/${pocket_id}/unlock`, {}); },
+  // Forecasting
+  getForecast(days = 30) { return PP.API.get('/api/premium/forecast', { days }); },
+  // Subscriptions
+  getDetectedSubscriptions() { return PP.API.get('/api/premium/subscriptions/detected'); },
+  updateDetectedSub(id, payload) { return PP.API.post(`/api/premium/subscriptions/detected/${id}/update`, payload); },
+  // Payment Approval
+  getApprovalSettings() { return PP.API.get('/api/premium/approval-mode/settings'); },
+  updateApprovalSettings(payload) { return PP.API.post('/api/premium/approval-mode/settings', payload); },
+  // Simulator
+  calculateSimulation(payload) { return PP.API.post('/api/premium/simulator/calculate', payload); },
+  applySimulation(payload) { return PP.API.post('/api/premium/simulator/apply', payload); },
+  // Routing
+  previewRouting(payload) { return PP.API.post('/api/premium/routing/preview', payload); },
+  // Concierge
+  askConcierge(question) { return PP.API.post('/api/premium/concierge/ask', { question }); }
+};
+
 

@@ -110,6 +110,10 @@ class LedgerService:
         if pocket.user_id != user.id:
             raise FinancialInvariantError('Pocket does not belong to the user')
 
+        if getattr(pocket, 'is_currently_locked', lambda: False)():
+            reason = pocket.lock_reason or 'Locked by user'
+            raise FinancialInvariantError(f'Pocket "{pocket.name}" is locked ({reason}). Money in locked pockets cannot be spent or withdrawn.')
+
         pocket_bal = cls._round(pocket.current_balance)
         if pocket_bal < amt:
             raise FinancialInvariantError(
@@ -185,6 +189,10 @@ class LedgerService:
 
         if from_pocket.archived or to_pocket.archived:
             raise FinancialInvariantError('Cannot transfer to or from an archived pocket')
+
+        if getattr(from_pocket, 'is_currently_locked', lambda: False)():
+            reason = from_pocket.lock_reason or 'Locked by user'
+            raise FinancialInvariantError(f'Source pocket "{from_pocket.name}" is locked ({reason}). Money in locked pockets cannot be transferred or spent.')
 
         from_bal = cls._round(from_pocket.current_balance)
         if from_bal < amt:

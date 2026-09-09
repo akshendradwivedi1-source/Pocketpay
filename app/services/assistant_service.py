@@ -278,6 +278,32 @@ You MUST respond strictly with a valid JSON object matching this schema:
         if openai_res:
             return openai_res
 
+        # Money Concierge Queries (Part 2.8 - Premium Financial Assistant)
+        if any(w in resolved_q for w in [
+            'can i afford', 'upcoming commitments', 'spend on subscriptions',
+            'spent on subscriptions', 'which pocket am i spending the most',
+            'spending the most from', 'my upcoming commitments'
+        ]):
+            try:
+                from app.services.premium_service import PremiumService
+                analysis = PremiumService.get_concierge_analysis(user, query_text)
+                return {
+                    'type': 'concierge_analysis',
+                    'title': '🤖 PocketPay Money Concierge',
+                    'message': analysis.get('answer', ''),
+                    'actions': [
+                        {'label': 'Open Premium Suite', 'icon': 'crown', 'action': 'premium'},
+                        {'label': 'Future Balance Forecast', 'icon': 'trending-up', 'action': 'analytics'}
+                    ],
+                    'suggested_prompts': [
+                        "Can I afford ₹8,000 this month?",
+                        "Which pocket am I spending the most from?",
+                        "Show my upcoming commitments"
+                    ]
+                }
+            except Exception:
+                pass
+
         # Financial Insights & Analytics Queries (Part 14)
         if any(w in resolved_q for w in [
             'where did i spend', 'most this month', 'biggest expense', 'largest expense',

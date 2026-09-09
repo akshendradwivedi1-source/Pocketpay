@@ -65,6 +65,7 @@ def create_app(config_name=None):
 
     from app.blueprints.premium import bp as premium_bp
     app.register_blueprint(premium_bp, url_prefix='/api/premium')
+    app.register_blueprint(premium_bp, url_prefix='/premium', name='premium_alias')
 
     # =========================================================================
     # GLOBAL API ERROR HANDLERS (Guarantees JSON responses for API/Auth routes)
@@ -74,6 +75,7 @@ def create_app(config_name=None):
     def is_api_request():
         return (
             request.path.startswith('/api/') or
+            request.path.startswith('/premium/') or
             request.path.startswith('/auth/') or
             request.path.startswith('/admin/api/') or
             request.is_json or
@@ -171,6 +173,10 @@ def create_app(config_name=None):
                     alter_statements.append(f"ALTER TABLE users ADD COLUMN transfer_frozen {bool_false}")
                 if 'transaction_limit' not in columns:
                     alter_statements.append("ALTER TABLE users ADD COLUMN transaction_limit FLOAT DEFAULT 50000.0")
+                if 'require_payment_approval' not in columns:
+                    alter_statements.append(f"ALTER TABLE users ADD COLUMN require_payment_approval {bool_false}")
+                if 'payment_approval_threshold' not in columns:
+                    alter_statements.append("ALTER TABLE users ADD COLUMN payment_approval_threshold FLOAT DEFAULT 5000.0")
 
                 for stmt in alter_statements:
                     try:
@@ -178,6 +184,50 @@ def create_app(config_name=None):
                             conn.execute(text(stmt))
                     except Exception as col_err:
                         app.logger.debug(f"[Schema Sync] Notice on '{stmt}': {col_err}")
+
+            if 'pockets' in tables:
+                pocket_cols = [c['name'] for c in inspector.get_columns('pockets')]
+                p_alter = []
+                if 'is_locked' not in pocket_cols:
+                    p_alter.append(f"ALTER TABLE pockets ADD COLUMN is_locked {bool_false}")
+                if 'locked_until_date' not in pocket_cols:
+                    p_alter.append(f"ALTER TABLE pockets ADD COLUMN locked_until_date {datetime_type}")
+                if 'locked_goal_amount' not in pocket_cols:
+                    p_alter.append("ALTER TABLE pockets ADD COLUMN locked_goal_amount NUMERIC(12,2)")
+                if 'lock_reason' not in pocket_cols:
+                    p_alter.append("ALTER TABLE pockets ADD COLUMN lock_reason VARCHAR(255)")
+                for stmt in p_alter:
+                    try:
+                        with db.engine.begin() as conn:
+                            conn.execute(text(stmt))
+                    except Exception:
+                        pass
+
+            if 'pocket_rules' in tables:
+                rule_cols = [c['name'] for c in inspector.get_columns('pocket_rules')]
+                r_alter = []
+                if 'name' not in rule_cols:
+                    r_alter.append("ALTER TABLE pocket_rules ADD COLUMN name VARCHAR(100)")
+                if 'trigger_type' not in rule_cols:
+                    r_alter.append("ALTER TABLE pocket_rules ADD COLUMN trigger_type VARCHAR(50) DEFAULT 'INCOME_RECEIVED'")
+                if 'trigger_threshold' not in rule_cols:
+                    r_alter.append("ALTER TABLE pocket_rules ADD COLUMN trigger_threshold NUMERIC(12,2)")
+                if 'action_type' not in rule_cols:
+                    r_alter.append("ALTER TABLE pocket_rules ADD COLUMN action_type VARCHAR(50) DEFAULT 'ALLOCATE_PERCENT'")
+                if 'action_value' not in rule_cols:
+                    r_alter.append("ALTER TABLE pocket_rules ADD COLUMN action_value NUMERIC(12,2)")
+                if 'last_executed_at' not in rule_cols:
+                    r_alter.append(f"ALTER TABLE pocket_rules ADD COLUMN last_executed_at {datetime_type}")
+                if 'execution_count' not in rule_cols:
+                    r_alter.append("ALTER TABLE pocket_rules ADD COLUMN execution_count INTEGER DEFAULT 0")
+                if 'last_status' not in rule_cols:
+                    r_alter.append("ALTER TABLE pocket_rules ADD COLUMN last_status VARCHAR(32) DEFAULT 'READY'")
+                for stmt in r_alter:
+                    try:
+                        with db.engine.begin() as conn:
+                            conn.execute(text(stmt))
+                    except Exception:
+                        pass
 
             try:
                 db.create_all()

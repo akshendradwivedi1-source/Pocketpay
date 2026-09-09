@@ -340,6 +340,30 @@ def execute_expense():
     pocket = Pocket.query.filter_by(id=pocket_id, user_id=current_user.id, archived=False).first()
     if not pocket:
         return error_response('Selected pocket not found', 404)
+
+    # 1. Pocket Lock check
+    if getattr(pocket, 'is_currently_locked', lambda: False)():
+        reason = pocket.lock_reason or 'Locked by user'
+        return error_response(
+            f'Pocket "{pocket.name}" is locked ({reason}). Money in locked pockets cannot be spent.',
+            400,
+            code='POCKET_LOCKED',
+            pocket=pocket.to_dict()
+        )
+
+    # 2. Payment Approval Mode (Part 2.5)
+    if current_user.is_premium_active and getattr(current_user, 'require_payment_approval', False):
+        threshold = float(getattr(current_user, 'payment_approval_threshold', 5000.0) or 5000.0)
+        confirmed = data.get('approval_confirmed') is True or bool(data.get('confirmation_token'))
+        if amount >= threshold and not confirmed:
+            return error_response(
+                f'Payment detected for ₹{amount:,.2f}. High-value confirmation is required for payments of ₹{threshold:,.2f} or higher.',
+                400,
+                code='PAYMENT_APPROVAL_REQUIRED',
+                amount=amount,
+                threshold=threshold,
+                requires_confirmation=True
+            )
     
     if float(pocket.current_balance or 0) < amount:
         other_pockets = Pocket.query.filter_by(
@@ -495,6 +519,30 @@ def pay_from_pocket():
     if pocket.archived:
         return error_response('Selected pocket has been archived', 400, code='POCKET_ARCHIVED')
 
+    # Pocket Lock enforcement
+    if getattr(pocket, 'is_currently_locked', lambda: False)():
+        reason = pocket.lock_reason or 'Locked by user'
+        return error_response(
+            f'Pocket "{pocket.name}" is locked ({reason}). Money in locked pockets cannot be spent.',
+            400,
+            code='POCKET_LOCKED',
+            pocket=pocket.to_dict()
+        )
+
+    # Payment Approval Mode
+    if current_user.is_premium_active and getattr(current_user, 'require_payment_approval', False):
+        threshold = float(getattr(current_user, 'payment_approval_threshold', 5000.0) or 5000.0)
+        confirmed = data.get('approval_confirmed') is True or bool(data.get('confirmation_token'))
+        if amount >= threshold and not confirmed:
+            return error_response(
+                f'Payment detected for ₹{amount:,.2f}. High-value confirmation is required for payments of ₹{threshold:,.2f} or higher.',
+                400,
+                code='PAYMENT_APPROVAL_REQUIRED',
+                amount=amount,
+                threshold=threshold,
+                requires_confirmation=True
+            )
+
     available_balance = float(pocket.current_balance or 0.0)
     if available_balance < amount:
         return error_response(
@@ -605,6 +653,14 @@ def pay_from_pocket():
         Notification.transaction_alert(current_user.id, tx)
         db.session.commit()
 
+        # Trigger smart rules evaluation for recipient if Premium
+        if recipient_user and recipient_tx and getattr(recipient_user, 'is_premium_active', False):
+            try:
+                from app.services.premium_service import PremiumService
+                PremiumService.evaluate_rules_on_credit(recipient_user, recipient_tx)
+            except Exception:
+                pass
+
         resp_data = {
             'transaction_id': tx.transaction_id,
             'amount': amount,
@@ -680,6 +736,20 @@ def pay_from_balance():
         if cached_resp:
             resp_body, resp_code = cached_resp
             return json_response(resp_body.get('data'), resp_body.get('message'), resp_code)
+
+    # Payment Approval Mode (Part 2.5)
+    if current_user.is_premium_active and getattr(current_user, 'require_payment_approval', False):
+        threshold = float(getattr(current_user, 'payment_approval_threshold', 5000.0) or 5000.0)
+        confirmed = data.get('approval_confirmed') is True or bool(data.get('confirmation_token'))
+        if amount >= threshold and not confirmed:
+            return error_response(
+                f'Payment detected for ₹{amount:,.2f}. High-value confirmation is required for payments of ₹{threshold:,.2f} or higher.',
+                400,
+                code='PAYMENT_APPROVAL_REQUIRED',
+                amount=amount,
+                threshold=threshold,
+                requires_confirmation=True
+            )
 
     available_balance = float(current_user.wallet_balance or 0.0)
     if available_balance < amount:
@@ -781,6 +851,14 @@ def pay_from_balance():
 
         Notification.transaction_alert(current_user.id, tx)
         db.session.commit()
+
+        # Trigger smart rules evaluation for recipient if Premium
+        if recipient_user and recipient_tx and getattr(recipient_user, 'is_premium_active', False):
+            try:
+                from app.services.premium_service import PremiumService
+                PremiumService.evaluate_rules_on_credit(recipient_user, recipient_tx)
+            except Exception:
+                pass
 
         resp_data = {
             'transaction_id': tx.transaction_id,

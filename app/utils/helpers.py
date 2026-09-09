@@ -87,6 +87,31 @@ def api_login_required(f):
     return decorated_function
 
 
+def premium_required(f):
+    """
+    Protects Premium-tier endpoints.
+    Standard users attempting to call a Premium API directly receive a 403 FORBIDDEN.
+    Never relies only on frontend JavaScript or localStorage.
+    """
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not current_user.is_authenticated:
+            return jsonify({
+                'success': False,
+                'error': 'Authentication required',
+                'message': 'Please log in to access this resource'
+            }), 401
+        if not getattr(current_user, 'is_premium_active', False):
+            return jsonify({
+                'success': False,
+                'error': 'Forbidden',
+                'code': 'PREMIUM_REQUIRED',
+                'message': 'This feature requires an active PocketPay Premium membership. Upgrade your plan to access this feature.'
+            }), 403
+        return f(*args, **kwargs)
+    return decorated_function
+
+
 def json_response(data=None, message='Success', status_code=200, success=True, **extra):
     response = {
         'success': success,

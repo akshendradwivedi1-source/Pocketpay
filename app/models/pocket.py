@@ -31,6 +31,12 @@ class Pocket(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
+    # Pocket Lock (Part 2 - Premium Feature)
+    is_locked = db.Column(db.Boolean, default=False)
+    locked_until_date = db.Column(db.DateTime, nullable=True)
+    locked_goal_amount = db.Column(db.Numeric(12, 2, asdecimal=False), nullable=True)
+    lock_reason = db.Column(db.String(255), nullable=True)
+    
     user = db.relationship('User', back_populates='pockets')
     transactions_from = db.relationship('Transaction', foreign_keys='Transaction.from_pocket_id',
                                          back_populates='from_pocket', cascade='all, delete-orphan')
@@ -39,6 +45,24 @@ class Pocket(db.Model):
     budgets = db.relationship('Budget', back_populates='pocket', cascade='all, delete-orphan')
     
     __table_args__ = (db.Index('ix_user_pocket_sort', 'user_id', 'sort_order'),)
+    
+    def is_currently_locked(self):
+        """
+        Returns True if the pocket is currently locked and cannot be debited for payments.
+        Checks explicit lock, date lock, and goal amount lock.
+        """
+        if not self.is_locked:
+            return False
+        # If locked until a date in the future
+        if self.locked_until_date and datetime.utcnow() < self.locked_until_date:
+            return True
+        # If locked until a goal amount is reached
+        if self.locked_goal_amount and float(self.current_balance or 0.0) < float(self.locked_goal_amount):
+            return True
+        # If lock was set with no auto-expiry, it remains locked until manually unlocked
+        if not self.locked_until_date and not self.locked_goal_amount:
+            return True
+        return False
     
     def add_money(self, amount, commit=False):
         if amount <= 0:
@@ -118,6 +142,11 @@ class Pocket(db.Model):
             'total_spent': round(float(self.total_spent or 0.0), 2),
             'archived': self.archived,
             'archived_at': self.archived_at.isoformat() if self.archived_at else None,
+            'is_locked': bool(self.is_locked),
+            'is_currently_locked': self.is_currently_locked(),
+            'locked_until_date': self.locked_until_date.isoformat() if self.locked_until_date else None,
+            'locked_goal_amount': round(float(self.locked_goal_amount), 2) if self.locked_goal_amount is not None else None,
+            'lock_reason': self.lock_reason or '',
             'spending_rules': self.spending_rules or {},
             'budget_usage_percent': self.budget_usage_percent(),
             'created_at': self.created_at.isoformat() if self.created_at else None,

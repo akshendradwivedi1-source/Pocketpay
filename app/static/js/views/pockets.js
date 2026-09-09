@@ -112,12 +112,22 @@ PP.Pockets = {
       <div class="pocket-card-inner">
         <div class="pocket-card-top">
           <div class="pocket-icon-wrap"><i data-lucide="${p.icon || 'wallet'}"></i></div>
-          <button class="pocket-menu-btn" data-id="${p.id}" aria-label="Pocket actions">
-            <i data-lucide="more-horizontal"></i>
-          </button>
+          <div style="display:flex;align-items:center;gap:0.4rem">
+            ${p.is_currently_locked ? `<span class="chip danger" style="font-size:0.7rem;font-weight:700;padding:2px 8px">🔒 LOCKED</span>` : ''}
+            <button class="pocket-menu-btn" data-id="${p.id}" aria-label="Pocket actions">
+              <i data-lucide="more-horizontal"></i>
+            </button>
+          </div>
         </div>
         <div class="pocket-card-name">${p.name}</div>
         ${p.description ? `<div class="pocket-card-desc">${p.description.slice(0, 50)}${p.description.length > 50 ? '…' : ''}</div>` : ''}
+        ${p.is_currently_locked ? `
+          <div style="background:rgba(239,68,68,0.1);border-radius:8px;padding:4px 8px;font-size:0.75rem;margin:4px 0;color:var(--danger)">
+            <div><b>Goal:</b> ${p.lock_reason || 'Protected savings'}</div>
+            ${p.locked_until_date ? `<div><b>Unlock:</b> ${new Date(p.locked_until_date).toLocaleDateString()}</div>` : ''}
+            ${p.locked_goal_amount ? `<div><b>Target:</b> ₹${p.locked_goal_amount.toLocaleString()}</div>` : ''}
+          </div>
+        ` : ''}
         <div class="pocket-card-balance">
           <div class="pocket-balance-label">Balance</div>
           <div class="pocket-balance-value">${PP.fmt(p.current_balance)}</div>
