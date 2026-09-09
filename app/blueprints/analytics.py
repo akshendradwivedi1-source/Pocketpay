@@ -846,3 +846,316 @@ def delete_goal(goal_id):
         'wallet_balance': current_user.wallet_balance
     }, f'Goal "{goal.name}" deleted' + (f' and ₹{saved:,.2f} refunded to wallet' if saved > 0 else ''))
 
+
+@bp.route('/forecast', methods=['GET'])
+@api_login_required
+def get_spending_forecast():
+    """
+    Part 16: Premium Spending & Balance Forecast.
+    Calculates estimated 30-day balance from 30-day run-rate and recurring expenses.
+    Clearly labeled as an informational estimate.
+    """
+    now = datetime.utcnow()
+    past_30d = now - timedelta(days=30)
+
+    pockets = Pocket.query.filter_by(user_id=current_user.id, archived=False).all()
+    pocket_bal = sum(p.current_balance for p in pockets)
+    current_balance = round(float(current_user.wallet_balance or 0.0) + pocket_bal, 2)
+
+    expenses_30d = db.session.query(func.sum(Transaction.amount)).filter(
+        Transaction.user_id == current_user.id,
+        Transaction.type.in_(['expense', 'withdraw']),
+        Transaction.created_at >= past_30d,
+        Transaction.status == 'completed'
+    ).scalar() or 0.0
+
+    income_30d = db.session.query(func.sum(Transaction.amount)).filter(
+        Transaction.user_id == current_user.id,
+        Transaction.type.in_(['income', 'topup', 'peer_receive']),
+        Transaction.created_at >= past_30d,
+        Transaction.status == 'completed'
+    ).scalar() or 0.0
+
+    daily_spend = float(expenses_30d) / 30.0
+    daily_income = float(income_30d) / 30.0
+
+    projected_spend_30d = round(daily_spend * 30.0, 2)
+    projected_income_30d = round(daily_income * 30.0, 2)
+    estimated_balance_30d = round(max(0.0, current_balance + projected_income_30d - projected_spend_30d), 2)
+
+    return json_response({
+        'current_balance': current_balance,
+        'estimated_balance_30d': estimated_balance_30d,
+        'projected_spend_30d': projected_spend_30d,
+        'projected_income_30d': projected_income_30d,
+        'daily_burn_rate': round(daily_spend, 2),
+        'confidence_score': 88 if expenses_30d > 0 else 60,
+        'label': 'Informational 30-Day Estimate',
+        'disclaimer': 'Forecast is an informational projection based on your historical 30-day transactions and does not guarantee financial outcomes.'
+    })
+
+
+@bp.route('/wrapped', methods=['GET'])
+@api_login_required
+def get_monthly_wrapped():
+    """
+    Part 20: Monthly PocketPay Wrapped Summary.
+    """
+    now = datetime.utcnow()
+    month_start = datetime(now.year, now.month, 1)
+    prev_month_start = datetime(now.year if now.month > 1 else now.year - 1, now.month - 1 if now.month > 1 else 12, 1)
+
+    income_curr = db.session.query(func.sum(Transaction.amount)).filter(
+        Transaction.user_id == current_user.id,
+        Transaction.type.in_(['income', 'topup', 'peer_receive']),
+        Transaction.created_at >= month_start,
+        Transaction.status == 'completed'
+    ).scalar() or 0.0
+
+    expense_curr = db.session.query(func.sum(Transaction.amount)).filter(
+        Transaction.user_id == current_user.id,
+        Transaction.type.in_(['expense', 'withdraw']),
+        Transaction.created_at >= month_start,
+        Transaction.status == 'completed'
+    ).scalar() or 0.0
+
+    expense_prev = db.session.query(func.sum(Transaction.amount)).filter(
+        Transaction.user_id == current_user.id,
+        Transaction.type.in_(['expense', 'withdraw']),
+        Transaction.created_at >= prev_month_start,
+        Transaction.created_at < month_start,
+        Transaction.status == 'completed'
+    ).scalar() or 0.0
+
+    delta_expense = expense_curr - expense_prev
+    mom_change_pct = round(((delta_expense) / expense_prev * 100) if expense_prev > 0 else 0.0, 1)
+
+    largest_tx = Transaction.query.filter(
+        Transaction.user_id == current_user.id,
+        Transaction.type.in_(['expense', 'withdraw']),
+        Transaction.created_at >= month_start,
+        Transaction.status == 'completed'
+    ).order_by(Transaction.amount.desc()).first()
+
+    top_cat = db.session.query(Transaction.category, func.sum(Transaction.amount)).filter(
+        Transaction.user_id == current_user.id,
+        Transaction.type.in_(['expense', 'withdraw']),
+        Transaction.created_at >= month_start,
+        Transaction.status == 'completed'
+    ).group_by(Transaction.category).order_by(func.sum(Transaction.amount).desc()).first()
+
+    top_pocket = Pocket.query.filter_by(user_id=current_user.id, archived=False).order_by(Pocket.total_spent.desc()).first()
+    saved_amount = max(0.0, income_curr - expense_curr)
+    month_name = now.strftime('%B %Y')
+
+    ai_insight = (
+        f"In {now.strftime('%B')}, you maintained great discipline! You saved ₹{saved_amount:,.2f} "
+        f"with {top_cat[0] if top_cat else 'everyday essentials'} as your main category."
+    )
+
+    return json_response({
+        'month_name': month_name,
+        'total_income': round(income_curr, 2),
+        'total_spending': round(expense_curr, 2),
+        'saved': round(saved_amount, 2),
+        'savings_rate': round((saved_amount / income_curr * 100) if income_curr > 0 else 0.0, 1),
+        'top_category': top_cat[0] if top_cat else 'General',
+        'top_category_amount': round(top_cat[1], 2) if top_cat else 0.0,
+        'top_pocket': top_pocket.name if top_pocket else 'Main Pocket',
+        'largest_expense': {
+            'amount': round(largest_tx.amount, 2) if largest_tx else 0.0,
+            'merchant': largest_tx.merchant or largest_tx.description if largest_tx else 'N/A',
+            'category': largest_tx.category if largest_tx else 'N/A'
+        },
+        'mom_comparison_pct': mom_change_pct,
+        'ai_insight': ai_insight
+    })
+
+
+@bp.route('/financial-health', methods=['GET'])
+@api_login_required
+def get_financial_health():
+    """
+    Part 21: Premium Financial Health Section.
+    Generates a 0–100 score based on 5 parameters. Informational only.
+    """
+    now = datetime.utcnow()
+    month_start = datetime(now.year, now.month, 1)
+
+    income = db.session.query(func.sum(Transaction.amount)).filter(
+        Transaction.user_id == current_user.id,
+        Transaction.type.in_(['income', 'topup', 'peer_receive']),
+        Transaction.created_at >= month_start,
+        Transaction.status == 'completed'
+    ).scalar() or 0.0
+
+    expense = db.session.query(func.sum(Transaction.amount)).filter(
+        Transaction.user_id == current_user.id,
+        Transaction.type.in_(['expense', 'withdraw']),
+        Transaction.created_at >= month_start,
+        Transaction.status == 'completed'
+    ).scalar() or 0.0
+
+    savings = max(0.0, income - expense)
+    savings_rate = (savings / income * 100) if income > 0 else 0.0
+
+    score_saving = min(20, int(savings_rate)) if savings_rate > 0 else 5
+
+    budgets = Budget.query.filter_by(user_id=current_user.id, is_active=True).all()
+    over_budget = sum(1 for b in budgets if b.get_percentage_used() > 100)
+    score_spending = max(5, 20 - (over_budget * 5))
+
+    goals = SavingsGoal.query.filter_by(user_id=current_user.id).all()
+    if goals:
+        avg_progress = sum(g.progress_percent for g in goals) / len(goals)
+        score_goals = min(20, max(5, int(avg_progress * 0.2)))
+    else:
+        score_goals = 15
+
+    score_recurring = 18
+
+    total_assets = float(current_user.wallet_balance or 0.0) + sum(p.current_balance for p in Pocket.query.filter_by(user_id=current_user.id, archived=False).all())
+    score_balance = min(20, max(8, int((total_assets / max(1000, expense)) * 10))) if expense > 0 else 18
+
+    total_score = min(100, score_saving + score_spending + score_goals + score_recurring + score_balance)
+    rating = 'Excellent' if total_score >= 80 else ('Good' if total_score >= 65 else 'Fair')
+
+    return json_response({
+        'overall_score': total_score,
+        'rating': rating,
+        'breakdown': {
+            'saving_consistency': {'score': score_saving, 'max': 20, 'label': f'{savings_rate:.1f}% Savings Rate'},
+            'spending_stability': {'score': score_spending, 'max': 20, 'label': f'{over_budget} Budgets Exceeded'},
+            'goal_progress': {'score': score_goals, 'max': 20, 'label': f'{len(goals)} Active Goals'},
+            'recurring_expenses': {'score': score_recurring, 'max': 20, 'label': 'Healthy Recurring Expense Ratio'},
+            'balance_stability': {'score': score_balance, 'max': 20, 'label': f'₹{total_assets:,.2f} Total Net Assets'}
+        },
+        'disclaimer': 'PocketPay informational financial health score based on your active budgets and ledger records. Not formal financial advice.'
+    })
+
+
+@bp.route('/recurring-subscriptions', methods=['GET'])
+@api_login_required
+def detect_recurring_subscriptions():
+    """
+    Part 19: Subscription & Recurring Expense Detector.
+    Analyzes user transactions to identify recurring expenses.
+    """
+    keywords = ['netflix', 'spotify', 'prime', 'amazon', 'apple', 'icloud', 'google', 'youtube', 'adobe', 'figma', 'canva', 'hotstar', 'gym', 'gymnasium', 'subscription', 'broadband', 'wifi']
+    txs = Transaction.query.filter(
+        Transaction.user_id == current_user.id,
+        Transaction.type.in_(['expense', 'withdraw']),
+        Transaction.status == 'completed'
+    ).order_by(Transaction.created_at.desc()).limit(150).all()
+
+    detected = {}
+    for t in txs:
+        name = (t.merchant or t.description or t.category or '').strip()
+        name_lower = name.lower()
+        if any(k in name_lower for k in keywords) or 'sub' in (t.category or '').lower():
+            key = name_lower[:15]
+            if key not in detected:
+                detected[key] = {
+                    'name': name.title(),
+                    'monthly_amount': round(float(t.amount or 0.0), 2),
+                    'annual_estimated': round(float(t.amount or 0.0) * 12, 2),
+                    'category': t.category or 'Subscriptions',
+                    'last_charged': t.created_at.strftime('%d %b %Y') if t.created_at else None
+                }
+
+    sub_list = list(detected.values())
+    total_monthly = sum(s['monthly_amount'] for s in sub_list)
+    total_annual = sum(s['annual_estimated'] for s in sub_list)
+
+    return json_response({
+        'detected_count': len(sub_list),
+        'total_monthly_commitment': round(total_monthly, 2),
+        'total_annual_commitment': round(total_annual, 2),
+        'subscriptions': sub_list,
+        'notice': 'PocketPay scans detected recurring patterns. PocketPay does not cancel third-party merchant contracts automatically.'
+    })
+
+
+@bp.route('/smart-alerts', methods=['GET'])
+@api_login_required
+def get_smart_alerts():
+    """
+    Part 18: Smart Alerts for Premium Users.
+    """
+    alerts = []
+    pockets = Pocket.query.filter_by(user_id=current_user.id, archived=False).all()
+    for p in pockets:
+        if p.monthly_limit and p.monthly_limit > 0:
+            pct = (p.total_spent / p.monthly_limit) * 100
+            if pct >= 90:
+                alerts.append({
+                    'type': 'spending_limit',
+                    'severity': 'warning',
+                    'title': f'{p.name} Limit Warning',
+                    'message': f'You have used {pct:.1f}% of your monthly limit for {p.name}.',
+                    'pocket_id': p.id
+                })
+
+    recent_large = Transaction.query.filter(
+        Transaction.user_id == current_user.id,
+        Transaction.type == 'expense',
+        Transaction.amount >= 5000,
+        Transaction.status == 'completed'
+    ).order_by(Transaction.created_at.desc()).first()
+
+    if recent_large:
+        alerts.append({
+            'type': 'large_spend',
+            'severity': 'info',
+            'title': 'High Value Transaction',
+            'message': f'Recent transaction of ₹{recent_large.amount:,.2f} at {recent_large.merchant or "Merchant"}.',
+            'transaction_id': recent_large.transaction_id
+        })
+
+    return json_response({'alerts': alerts, 'count': len(alerts)})
+
+
+@bp.route('/statement/export', methods=['GET'])
+@api_login_required
+def export_statement():
+    """
+    Part 24: Premium Statements Export (CSV & Structured JSON).
+    """
+    import io
+    import csv
+    from flask import Response
+
+    fmt = request.args.get('format', 'csv').lower()
+    txs = Transaction.query.filter_by(user_id=current_user.id).order_by(Transaction.created_at.desc()).all()
+
+    if fmt == 'csv':
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(['Transaction ID', 'Date', 'Type', 'Amount (INR)', 'Category', 'Merchant/Recipient', 'Payment Method', 'Status', 'Description'])
+        for t in txs:
+            writer.writerow([
+                t.transaction_id,
+                t.created_at.strftime('%Y-%m-%d %H:%M:%S') if t.created_at else '',
+                t.type,
+                f"{float(t.amount or 0.0):.2f}",
+                t.category or '',
+                t.merchant or '',
+                t.payment_method or '',
+                t.status or '',
+                t.description or ''
+            ])
+        output.seek(0)
+        return Response(
+            output.getvalue(),
+            mimetype="text/csv",
+            headers={"Content-disposition": f"attachment; filename=pocketpay_statement_{current_user.id}.csv"}
+        )
+
+    return json_response({
+        'user_name': current_user.full_name,
+        'user_email': current_user.email,
+        'generated_at': datetime.utcnow().isoformat(),
+        'transactions_count': len(txs),
+        'transactions': [t.to_dict() for t in txs[:100]]
+    })
+

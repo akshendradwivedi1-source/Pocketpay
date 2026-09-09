@@ -177,10 +177,11 @@ class PayoutProvider:
         return mode, is_sandbox
 
     @classmethod
-    def execute_bank_payout(cls, user, amount: float, beneficiary: dict, mode: str = 'IMPS', idempotency_key: str = None) -> dict:
+    def execute_bank_payout(cls, user, amount: float, beneficiary: dict, mode: str = 'IMPS', idempotency_key: str = None, source_type: str = 'wallet', pocket_id: int = None) -> dict:
         """
         Executes a bank transfer (Payout) via the configured payment gateway provider.
         Atomically validates, reserves funds, calls provider, and reconciles state.
+        Supports debiting from unallocated wallet balance or from a dedicated smart pocket.
         """
         provider_name, is_sandbox = cls.get_provider_mode()
         
@@ -216,18 +217,33 @@ class PayoutProvider:
                         "message": "Transfer already processed (Idempotent Request)"
                     }
                 
-        # Balance Check
-        if (user.wallet_balance or 0.0) < amount:
-            return {
-                "success": False,
-                "error": f"Insufficient available balance. You have ₹{user.wallet_balance:,.2f} available.",
-                "code": "INSUFFICIENT_BALANCE",
-                "available_balance": user.wallet_balance,
-                "required_amount": amount
-            }
-            
-        # Deduct wallet balance atomically
-        user.wallet_balance = round(user.wallet_balance - amount, 2)
+        # Balance Check & Deduction
+        target_pocket = None
+        if source_type == 'pocket' and pocket_id:
+            from app.models.pocket import Pocket
+            target_pocket = Pocket.query.filter_by(id=pocket_id, user_id=user.id, archived=False).first()
+            if not target_pocket:
+                return {"success": False, "error": "Selected pocket not found or unauthorized", "code": "POCKET_NOT_FOUND"}
+            if (target_pocket.current_balance or 0.0) < amount:
+                return {
+                    "success": False,
+                    "error": f"Insufficient balance in {target_pocket.name}. Balance is ₹{target_pocket.current_balance:,.2f}.",
+                    "code": "INSUFFICIENT_BALANCE",
+                    "available_balance": target_pocket.current_balance,
+                    "required_amount": amount
+                }
+            target_pocket.current_balance = round(target_pocket.current_balance - amount, 2)
+            target_pocket.total_spent = round((target_pocket.total_spent or 0.0) + amount, 2)
+        else:
+            if (user.wallet_balance or 0.0) < amount:
+                return {
+                    "success": False,
+                    "error": f"Insufficient available balance. You have ₹{user.wallet_balance:,.2f} available.",
+                    "code": "INSUFFICIENT_BALANCE",
+                    "available_balance": user.wallet_balance,
+                    "required_amount": amount
+                }
+            user.wallet_balance = round(user.wallet_balance - amount, 2)
         
         # Generate Payout ID & Simulated UTR
         payout_id = f"payout_{int(time.time())}_{uuid.uuid4().hex[:6]}"
@@ -365,13 +381,17 @@ class PayoutProvider:
             user_id=user.id,
             type='withdraw',
             amount=amount,
+            from_pocket_id=target_pocket.id if target_pocket else None,
             category='Bank Transfer',
             merchant=holder,
-            description=f'Transfer to {holder} ({bank_name} {masked_acc}) via {mode.upper()}',
+            description=f'Transfer to {holder} ({bank_name} {masked_acc}) via {mode.upper()}' + (f' from {target_pocket.name}' if target_pocket else ''),
             payment_method='bank_transfer',
             status='completed',
             completed_at=datetime.utcnow(),
             extra_data={
+                'source_type': 'pocket' if target_pocket else 'wallet',
+                'source_pocket_id': target_pocket.id if target_pocket else None,
+                'source_pocket_name': target_pocket.name if target_pocket else None,
                 'idempotency_key': idempotency_key,
                 'payout': payout_payload,
                 'payout_id': payout_id,

@@ -794,3 +794,92 @@ def get_pocket_qr(pocket_id):
         'scannable_url': scannable_url,
         'qr_code_url': qr_url
     })
+
+
+# =============================================================================
+# PART 22: SMART POCKET AUTOMATION RULES
+# =============================================================================
+
+@bp.route('/rules', methods=['GET'])
+@api_login_required
+def get_pocket_rules():
+    """Returns all active and configured pocket automation rules for user"""
+    from app.models.subscription import PocketRule
+    rules = PocketRule.query.filter_by(user_id=current_user.id).order_by(PocketRule.created_at.desc()).all()
+    return json_response({
+        'rules': [r.to_dict() for r in rules],
+        'count': len(rules)
+    })
+
+
+@bp.route('/rules', methods=['POST'])
+@api_login_required
+def create_pocket_rule():
+    """Creates a server-side smart automation rule with explicit user authorization"""
+    from app.models.subscription import PocketRule
+    data = request.get_json() or {}
+    valid, msg = validate_required_fields(data, ['target_pocket_id', 'rule_type'])
+    if not valid:
+        return error_response(msg, 400)
+
+    target_id = data.get('target_pocket_id')
+    source_id = data.get('source_pocket_id')
+    rule_type = str(data.get('rule_type', 'incoming_split')).strip()
+    amount = float(data.get('amount', 0.0))
+    percentage = float(data.get('percentage', 0.0)) if data.get('percentage') else None
+    desc = data.get('description', '').strip()
+
+    # Validate target pocket ownership
+    target_p = Pocket.query.filter_by(id=target_id, user_id=current_user.id, archived=False).first()
+    if not target_p:
+        return error_response('Target pocket not found or unauthorized', 404)
+
+    if source_id:
+        source_p = Pocket.query.filter_by(id=source_id, user_id=current_user.id, archived=False).first()
+        if not source_p:
+            return error_response('Source pocket not found or unauthorized', 404)
+
+    rule = PocketRule(
+        user_id=current_user.id,
+        source_pocket_id=source_id,
+        target_pocket_id=target_id,
+        rule_type=rule_type,
+        amount=amount,
+        percentage=percentage,
+        is_active=True,
+        description=desc or f"Rule: Move to {target_p.name}"
+    )
+    db.session.add(rule)
+    db.session.commit()
+
+    return json_response(rule.to_dict(), "Smart pocket automation rule created successfully", 201)
+
+
+@bp.route('/rules/<int:rule_id>/toggle', methods=['POST'])
+@api_login_required
+def toggle_pocket_rule(rule_id):
+    """Enables or disables an automated rule"""
+    from app.models.subscription import PocketRule
+    rule = PocketRule.query.filter_by(id=rule_id, user_id=current_user.id).first()
+    if not rule:
+        return error_response('Rule not found', 404)
+
+    rule.is_active = not rule.is_active
+    db.session.commit()
+    status_str = "enabled" if rule.is_active else "disabled"
+    return json_response(rule.to_dict(), f"Rule {status_str} successfully")
+
+
+@bp.route('/rules/<int:rule_id>', methods=['DELETE'])
+@api_login_required
+def delete_pocket_rule(rule_id):
+    """Deletes an automation rule"""
+    from app.models.subscription import PocketRule
+    rule = PocketRule.query.filter_by(id=rule_id, user_id=current_user.id).first()
+    if not rule:
+        return error_response('Rule not found', 404)
+
+    db.session.delete(rule)
+    db.session.commit()
+    return json_response({}, "Automation rule deleted successfully")
+

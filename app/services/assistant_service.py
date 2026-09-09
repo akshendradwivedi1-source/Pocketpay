@@ -66,6 +66,59 @@ class AssistantService:
         except Exception:
             tx_str = "No recent transactions"
 
+        # Financial Aggregates & Insights
+        now = datetime.utcnow()
+        month_start = datetime(now.year, now.month, 1)
+        prev_month_start = datetime(now.year if now.month > 1 else now.year - 1, now.month - 1 if now.month > 1 else 12, 1)
+        
+        income_this_month = 0.0
+        spent_this_month = 0.0
+        spent_last_month = 0.0
+        travel_spend = 0.0
+        top_cat_name = "None"
+        top_cat_amt = 0.0
+        largest_expense_amt = 0.0
+        largest_expense_desc = "None"
+        cat_totals = {}
+
+        try:
+            from app.models.transaction import Transaction
+            user_txs = user.transactions.filter(Transaction.created_at >= prev_month_start, Transaction.status == 'completed').all()
+            for t in user_txs:
+                amt = float(t.amount or 0.0)
+                if t.created_at >= month_start:
+                    if t.type in ['income', 'topup', 'peer_receive']:
+                        income_this_month += amt
+                    elif t.type in ['expense', 'withdraw']:
+                        spent_this_month += amt
+                        cat = t.category or 'Other'
+                        cat_totals[cat] = cat_totals.get(cat, 0.0) + amt
+                        if 'travel' in cat.lower():
+                            travel_spend += amt
+                        if amt > largest_expense_amt:
+                            largest_expense_amt = amt
+                            largest_expense_desc = t.merchant or t.description or cat
+                else:
+                    if t.type in ['expense', 'withdraw']:
+                        spent_last_month += amt
+
+            if cat_totals:
+                sorted_cats = sorted(cat_totals.items(), key=lambda x: x[1], reverse=True)
+                top_cat_name, top_cat_amt = sorted_cats[0]
+        except Exception:
+            pass
+
+        saved_this_month = max(0.0, income_this_month - spent_this_month)
+        fastest_pocket_name = "None"
+        fastest_pocket_bal = 0.0
+        try:
+            if pockets:
+                sorted_pockets = sorted(pockets, key=lambda p: float(p.current_balance or 0.0), reverse=True)
+                fastest_pocket_name = sorted_pockets[0].name
+                fastest_pocket_bal = float(sorted_pockets[0].current_balance or 0.0)
+        except Exception:
+            pass
+
         return (
             f"AUTHENTICATED USER ACCOUNT CONTEXT:\n"
             f"- Full Name: {user.full_name}\n"
@@ -77,6 +130,13 @@ class AssistantService:
             f"- Linked Partner Banks: {banks_str}\n"
             f"- Active Budget Pockets: {pockets_str}\n"
             f"- Recent Transactions: {tx_str}\n"
+            f"- PocketPay Premium Status: {'Active (VIP)' if getattr(user, 'is_premium_active', False) else 'Free Tier'}\n"
+            f"- Spent This Month: ₹{spent_this_month:,.2f} (Top Category: {top_cat_name} with ₹{top_cat_amt:,.2f})\n"
+            f"- Spent Last Month: ₹{spent_last_month:,.2f}\n"
+            f"- Income This Month: ₹{income_this_month:,.2f} | Net Saved This Month: ₹{saved_this_month:,.2f}\n"
+            f"- Largest Single Expense: ₹{largest_expense_amt:,.2f} ({largest_expense_desc})\n"
+            f"- Travel Spending This Month: ₹{travel_spend:,.2f}\n"
+            f"- Fastest Growing / Leading Pocket: {fastest_pocket_name} (₹{fastest_pocket_bal:,.2f})\n"
             f"- Security Credentials Setup: {'Completed' if getattr(user, 'security_setup_completed', False) else 'Pending / Required'}\n"
             f"- 4-Digit Transaction PIN: {'Configured' if user.transaction_pin_hash else 'Not set'}\n"
             f"- 2FA / TOTP: {'Enabled' if getattr(user, 'totp_enabled', False) else 'Disabled'}\n"
@@ -217,6 +277,18 @@ You MUST respond strictly with a valid JSON object matching this schema:
         openai_res = cls._call_openai_assistant(user, query_text, route=route, chat_history=chat_history)
         if openai_res:
             return openai_res
+
+        # Financial Insights & Analytics Queries (Part 14)
+        if any(w in resolved_q for w in [
+            'where did i spend', 'most this month', 'biggest expense', 'largest expense',
+            'compare my spending', 'compare with last month', 'compare spending',
+            'which pocket is growing', 'growing fastest', 'grow fastest',
+            'how much have i saved', 'how much did i save', 'saved this month',
+            'why did my balance fall', 'balance fell', 'balance drop',
+            'summary of this month', "month's spending", 'spending summary',
+            'spend on travel', 'spent on travel'
+        ]):
+            return cls._handle_financial_insights(user, resolved_q)
 
         # 2. Support, Helplines & Complaints (Prioritized)
         if any(w in resolved_q for w in [
@@ -543,6 +615,163 @@ You MUST respond strictly with a valid JSON object matching this schema:
                 {'label': 'Security Settings', 'icon': 'shield-check', 'action': 'settings'}
             ],
             'suggested_prompts': ['What is my balance?', 'How do I change my password?', 'Give me the helpline number']
+        }
+
+    @classmethod
+    def _handle_financial_insights(cls, user: Optional[User], q: str) -> Dict[str, Any]:
+        if not user:
+            return cls._auth_required_response()
+
+        now = datetime.utcnow()
+        month_start = datetime(now.year, now.month, 1)
+        prev_month_start = datetime(now.year if now.month > 1 else now.year - 1, now.month - 1 if now.month > 1 else 12, 1)
+
+        income_this_month = 0.0
+        spent_this_month = 0.0
+        spent_last_month = 0.0
+        travel_spend = 0.0
+        cat_totals = {}
+        largest_expense = None
+
+        try:
+            txs = user.transactions.filter(Transaction.created_at >= prev_month_start, Transaction.status == 'completed').all()
+            for t in txs:
+                amt = float(t.amount or 0.0)
+                if t.created_at >= month_start:
+                    if t.type in ['income', 'topup', 'peer_receive']:
+                        income_this_month += amt
+                    elif t.type in ['expense', 'withdraw']:
+                        spent_this_month += amt
+                        cat = t.category or 'Other'
+                        cat_totals[cat] = cat_totals.get(cat, 0.0) + amt
+                        if 'travel' in cat.lower():
+                            travel_spend += amt
+                        if not largest_expense or amt > float(largest_expense.amount or 0.0):
+                            largest_expense = t
+                else:
+                    if t.type in ['expense', 'withdraw']:
+                        spent_last_month += amt
+        except Exception:
+            pass
+
+        saved_this_month = max(0.0, income_this_month - spent_this_month)
+        top_cat = sorted(cat_totals.items(), key=lambda x: x[1], reverse=True)[0] if cat_totals else ("General", 0.0)
+
+        pockets = [p for p in (user.pockets.all() if hasattr(user.pockets, 'all') else user.pockets or []) if not getattr(p, 'archived', False)]
+        fastest_pocket = sorted(pockets, key=lambda p: float(p.current_balance or 0.0), reverse=True)[0] if pockets else None
+
+        if 'travel' in q:
+            return {
+                'type': 'financial_insights',
+                'title': '✈️ Travel Spending',
+                'message': (
+                    f"This month, you have spent a total of <b>₹{travel_spend:,.2f}</b> on Travel & Commute.<br><br>"
+                    f"• Total month spend: ₹{spent_this_month:,.2f}<br>"
+                    f"• Travel share: {round((travel_spend / spent_this_month * 100) if spent_this_month > 0 else 0, 1)}%"
+                ),
+                'actions': [{'label': 'View Analytics', 'icon': 'pie-chart', 'action': 'analytics'}],
+                'suggested_prompts': ['Where did I spend the most this month?', 'Show my biggest expenses']
+            }
+
+        if any(w in q for w in ['biggest expense', 'largest expense', 'highest spend']):
+            desc = largest_expense.merchant or largest_expense.description if largest_expense else "None"
+            amt = float(largest_expense.amount or 0.0) if largest_expense else 0.0
+            return {
+                'type': 'financial_insights',
+                'title': '💳 Largest Expense',
+                'message': (
+                    f"Your largest single expense this month was <b>₹{amt:,.2f}</b> for <b>{desc}</b>.<br><br>"
+                    f"• Category: {largest_expense.category if largest_expense else 'General'}<br>"
+                    f"• Date: {largest_expense.created_at.strftime('%d %b %Y') if largest_expense and largest_expense.created_at else 'This month'}"
+                ),
+                'actions': [{'label': 'View Transactions', 'icon': 'arrow-left-right', 'action': 'transactions'}],
+                'suggested_prompts': ['Where did I spend the most this month?', 'Compare my spending with last month']
+            }
+
+        if any(w in q for w in ['where did i spend', 'most this month', 'top category']):
+            return {
+                'type': 'financial_insights',
+                'title': '📊 Top Spending Category',
+                'message': (
+                    f"You spent the most on <b>{top_cat[0]}</b> this month, totaling <b>₹{top_cat[1]:,.2f}</b> "
+                    f"({round((top_cat[1] / spent_this_month * 100) if spent_this_month > 0 else 0, 1)}% of total monthly spend).<br><br>"
+                    f"• Total expenses this month: ₹{spent_this_month:,.2f}<br>"
+                    f"• Number of categories: {len(cat_totals)}"
+                ),
+                'actions': [{'label': 'Explore Category Breakdown', 'icon': 'pie-chart', 'action': 'analytics'}],
+                'suggested_prompts': ['Show my biggest expenses', 'Compare my spending with last month']
+            }
+
+        if any(w in q for w in ['compare my spending', 'last month', 'compare spending']):
+            delta = spent_this_month - spent_last_month
+            pct = round((delta / spent_last_month * 100) if spent_last_month > 0 else 0.0, 1)
+            trend = "more" if delta > 0 else "less"
+            return {
+                'type': 'financial_insights',
+                'title': '📈 Spending Comparison',
+                'message': (
+                    f"You spent <b>₹{spent_this_month:,.2f}</b> this month compared to <b>₹{spent_last_month:,.2f}</b> last month.<br><br>"
+                    f"• That is <b>{abs(pct)}% {trend}</b> ({'+' if delta > 0 else ''}₹{delta:,.2f}) than last month.<br>"
+                    f"• Top category driving spend: <b>{top_cat[0]}</b> (₹{top_cat[1]:,.2f})"
+                ),
+                'actions': [{'label': 'View Detailed Comparison', 'icon': 'bar-chart-2', 'action': 'analytics'}],
+                'suggested_prompts': ['Why did my balance fall this month?', 'How much have I saved this month?']
+            }
+
+        if any(w in q for w in ['pocket is growing', 'growing fastest', 'grow fastest']):
+            p_name = fastest_pocket.name if fastest_pocket else "Main Pocket"
+            p_bal = float(fastest_pocket.current_balance or 0.0) if fastest_pocket else 0.0
+            return {
+                'type': 'financial_insights',
+                'title': '👛 Fastest Growing Pocket',
+                'message': (
+                    f"Your leading pocket is <b>{p_name}</b> with an available balance of <b>₹{p_bal:,.2f}</b>.<br><br>"
+                    f"• Total allocated across all active pockets: ₹{sum(float(p.current_balance or 0.0) for p in pockets):,.2f}<br>"
+                    f"• Active pockets count: {len(pockets)}"
+                ),
+                'actions': [{'label': 'View Pockets', 'icon': 'wallet-cards', 'action': 'pockets'}],
+                'suggested_prompts': ['How much have I saved this month?', 'Where did I spend the most this month?']
+            }
+
+        if any(w in q for w in ['saved this month', 'have i saved', 'did i save']):
+            rate = round((saved_this_month / income_this_month * 100) if income_this_month > 0 else 0.0, 1)
+            return {
+                'type': 'financial_insights',
+                'title': '🎯 Monthly Savings',
+                'message': (
+                    f"You have saved <b>₹{saved_this_month:,.2f}</b> this month (Savings rate: <b>{rate}%</b>).<br><br>"
+                    f"• Income: ₹{income_this_month:,.2f}<br>"
+                    f"• Expenses: ₹{spent_this_month:,.2f}"
+                ),
+                'actions': [{'label': 'Set Savings Goal', 'icon': 'target', 'action': 'budgets'}],
+                'suggested_prompts': ['Compare my spending with last month', 'Which Pocket is growing fastest?']
+            }
+
+        if any(w in q for w in ['balance fall', 'balance fell', 'drop']):
+            return {
+                'type': 'financial_insights',
+                'title': '📉 Balance Change Explanation',
+                'message': (
+                    f"Your balance decreased primarily due to <b>₹{spent_this_month:,.2f}</b> in total expenses this month.<br><br>"
+                    f"• Largest expenditure category: <b>{top_cat[0]}</b> (₹{top_cat[1]:,.2f})<br>"
+                    f"• Single biggest expense: ₹{float(largest_expense.amount or 0.0) if largest_expense else 0.0:,.2f} ({largest_expense.merchant or largest_expense.description if largest_expense else 'N/A'})"
+                ),
+                'actions': [{'label': 'View Transactions', 'icon': 'arrow-left-right', 'action': 'transactions'}],
+                'suggested_prompts': ['Where did I spend the most this month?', 'How much did I spend on travel?']
+            }
+
+        return {
+            'type': 'financial_insights',
+            'title': "📊 This Month's Financial Summary",
+            'message': (
+                f"Here is your spending breakdown for this month:<br><br>"
+                f"• <b>Total Spent:</b> ₹{spent_this_month:,.2f}<br>"
+                f"• <b>Total Income:</b> ₹{income_this_month:,.2f}<br>"
+                f"• <b>Net Saved:</b> ₹{saved_this_month:,.2f}<br>"
+                f"• <b>Top Category:</b> {top_cat[0]} (₹{top_cat[1]:,.2f})"
+            ),
+            'actions': [{'label': 'Open Analytics', 'icon': 'pie-chart', 'action': 'analytics'}],
+            'suggested_prompts': ['Where did I spend the most this month?', 'Compare my spending with last month']
         }
 
     @classmethod

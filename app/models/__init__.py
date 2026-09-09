@@ -10,6 +10,7 @@ from .money_request import MoneyRequest
 from .goal import SavingsGoal
 from .support_ticket import SupportTicket
 from .idempotency import IdempotencyRecord
+from .subscription import Subscription, PocketRule, LoginEvent
 
 __all__ = [
     'User',
@@ -24,6 +25,9 @@ __all__ = [
     'SavingsGoal',
     'SupportTicket',
     'IdempotencyRecord',
+    'Subscription',
+    'PocketRule',
+    'LoginEvent',
     'EXPENSE_CATEGORIES',
     'INCOME_CATEGORIES'
 ]

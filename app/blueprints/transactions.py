@@ -429,6 +429,382 @@ def execute_expense():
         return error_response(f'Payment failed: {str(e)}', 500)
 
 
+@bp.route('/pay-pocket', methods=['POST'])
+@api_login_required
+def pay_from_pocket():
+    """
+    Parts 2 & 3: Pay directly from an authenticated user's Pocket.
+    Validates ownership server-side, checks sufficient funds, checks PIN & limits,
+    executes atomic database debit, generates dual ledger records, and returns receipt.
+    """
+    data = request.get_json() or {}
+    valid, msg = validate_required_fields(data, ['pocket_id', 'amount'])
+    if not valid:
+        return error_response(msg, 400)
+
+    pocket_id = data.get('pocket_id')
+    try:
+        amount = round(float(data.get('amount', 0)), 2)
+    except (ValueError, TypeError):
+        return error_response('Invalid payment amount', 400)
+
+    recipient = str(data.get('recipient', '')).strip()
+    note = str(data.get('note', data.get('description', ''))).strip()
+    pin = str(data.get('pin', '')).strip()
+
+    if amount <= 0:
+        return error_response('Payment amount must be greater than zero', 400)
+
+    if getattr(current_user, 'transfer_frozen', False):
+        return error_response('Transfers are currently frozen on your account. Unfreeze in Security Centre.', 403, code='TRANSFERS_FROZEN')
+
+    tx_limit = float(getattr(current_user, 'transaction_limit', 100000.0) or 100000.0)
+    if amount > tx_limit:
+        return error_response(f'Payment exceeds your transaction limit of ₹{tx_limit:,.2f}', 400, code='LIMIT_EXCEEDED')
+
+    # Security PIN verification
+    if current_user.transaction_pin_hash:
+        if not pin:
+            return error_response('Security PIN is required to authorize payment', 400, code='PIN_REQUIRED')
+        success, error = current_user.verify_transaction_pin(pin)
+        if not success:
+            return error_response(error or 'Incorrect security PIN', 401, code='INCORRECT_PIN')
+
+    # 2FA TOTP verification
+    if current_user.totp_enabled:
+        totp_code = data.get('totp_code') or data.get('totp') or data.get('otp')
+        verified, err, err_code = current_user.verify_totp(totp_code)
+        if not verified:
+            return error_response(err or 'Invalid Authenticator 2FA code', 401, code=err_code or 'INCORRECT_TOTP')
+
+    # Idempotency check
+    idemp_key = get_idempotency_key(request, data)
+    idemp_rec = None
+    if idemp_key:
+        idemp_rec, cached_resp = check_idempotency(idemp_key, '/api/transactions/pay-pocket', current_user.id, data)
+        if cached_resp:
+            resp_body, resp_code = cached_resp
+            return json_response(resp_body.get('data'), resp_body.get('message'), resp_code)
+
+    # Server-side pocket ownership validation (CRITICAL)
+    pocket = Pocket.query.filter_by(id=pocket_id).first()
+    if not pocket:
+        return error_response('Selected pocket not found', 404, code='POCKET_NOT_FOUND')
+    if pocket.user_id != current_user.id:
+        return error_response('You do not have permission to spend from this pocket', 403, code='FORBIDDEN')
+    if pocket.archived:
+        return error_response('Selected pocket has been archived', 400, code='POCKET_ARCHIVED')
+
+    available_balance = float(pocket.current_balance or 0.0)
+    if available_balance < amount:
+        return error_response(
+            f'Insufficient funds in {pocket.name}. Available: ₹{available_balance:,.2f}, required: ₹{amount:,.2f}.',
+            400,
+            code='INSUFFICIENT_BALANCE',
+            available_balance=available_balance,
+            required_amount=amount,
+            shortage=round(amount - available_balance, 2)
+        )
+
+    try:
+        # Atomic deduction
+        pocket.current_balance = round(available_balance - amount, 2)
+        pocket.total_spent = round(float(pocket.total_spent or 0.0) + amount, 2)
+        db.session.flush()
+
+        # Check if recipient matches an existing PocketPay user
+        from app.models.user import User
+        recipient_user = None
+        if recipient:
+            all_other = User.query.filter(User.id != current_user.id).all()
+            clean_rec = recipient.strip().lower()
+            for u in all_other:
+                if (u.virtual_wallet_id and u.virtual_wallet_id.lower() == clean_rec) or \
+                   (u.virtual_upi_id and u.virtual_upi_id.lower() == clean_rec) or \
+                   (u.phone and u.phone.replace(' ', '') == recipient.replace(' ', '')) or \
+                   (u.full_name.strip().lower() == clean_rec) or \
+                   (u.email.strip().lower() == clean_rec):
+                    recipient_user = u
+                    break
+
+        recipient_tx = None
+        if recipient_user:
+            recipient_user.wallet_balance = round(float(recipient_user.wallet_balance or 0.0) + amount, 2)
+            recipient_tx = Transaction(
+                transaction_id=Transaction.generate_transaction_id(),
+                user_id=recipient_user.id,
+                type='peer_receive',
+                amount=amount,
+                category='Payment',
+                merchant=current_user.full_name,
+                description=f'Payment received from {current_user.full_name}' + (f': {note}' if note else ''),
+                payment_method='pocket_payment',
+                status='completed',
+                completed_at=datetime.utcnow(),
+                extra_data={'sender_user_id': current_user.id, 'sender_name': current_user.full_name, 'from_pocket': pocket.name}
+            )
+            db.session.add(recipient_tx)
+            db.session.flush()
+            recipient_tx.qr_code_url = generate_qr_code(build_qr_tx_url(recipient_tx), 200)
+            Notification.transaction_alert(recipient_user.id, recipient_tx)
+
+        # Create sender transaction
+        tx = Transaction(
+            transaction_id=Transaction.generate_transaction_id(),
+            user_id=current_user.id,
+            type='expense',
+            source_type='pocket',
+            source_id=str(pocket.id),
+            amount=amount,
+            from_pocket_id=pocket.id,
+            category=data.get('category', 'Payment'),
+            merchant=recipient or 'Merchant / Recipient',
+            description=note or f'Payment to {recipient or "Recipient"} from {pocket.name}',
+            payment_method='pocket_payment',
+            status='completed',
+            completed_at=datetime.utcnow(),
+            extra_data={
+                'source': 'pocket',
+                'source_pocket_id': pocket.id,
+                'source_pocket_name': pocket.name,
+                'recipient': recipient,
+                'recipient_user_id': recipient_user.id if recipient_user else None,
+                'balance_before': available_balance,
+                'balance_after': pocket.current_balance
+            }
+        )
+        db.session.add(tx)
+        db.session.flush()
+        tx.qr_code_url = generate_qr_code(build_qr_tx_url(tx), 200)
+
+        # Dual ledger entry
+        try:
+            from app.services.ledger_service import LedgerService
+            LedgerService.record_entry(
+                user_id=current_user.id,
+                transaction_id=tx.id,
+                entry_type='DEBIT',
+                amount=amount,
+                source_type='pocket',
+                source_id=pocket.id,
+                description=f'Payment of ₹{amount:,.2f} from {pocket.name}'
+            )
+            if recipient_user and recipient_tx:
+                LedgerService.record_entry(
+                    user_id=recipient_user.id,
+                    transaction_id=recipient_tx.id,
+                    entry_type='CREDIT',
+                    amount=amount,
+                    source_type='wallet',
+                    source_id=recipient_user.id,
+                    description=f'Payment of ₹{amount:,.2f} from {current_user.full_name}'
+                )
+        except Exception:
+            pass
+
+        Notification.transaction_alert(current_user.id, tx)
+        db.session.commit()
+
+        resp_data = {
+            'transaction_id': tx.transaction_id,
+            'amount': amount,
+            'source_pocket_id': pocket.id,
+            'source_pocket_name': pocket.name,
+            'available_before': available_balance,
+            'remaining_balance': pocket.current_balance,
+            'recipient': recipient,
+            'payment_method': 'pocket_payment',
+            'status': 'completed',
+            'timestamp': tx.completed_at.isoformat(),
+            'receipt_qr': tx.qr_code_url,
+            'transaction': tx.to_dict(True)
+        }
+
+        if idemp_rec:
+            save_idempotency(idemp_rec, {'data': resp_data, 'message': f'Payment of ₹{amount:,.2f} from {pocket.name} confirmed.'}, 201)
+
+        return json_response(resp_data, f'Payment of ₹{amount:,.2f} from {pocket.name} successful.', 201)
+
+    except Exception as e:
+        db.session.rollback()
+        return error_response(f'Payment failed: {str(e)}', 500)
+
+
+@bp.route('/pay-balance', methods=['POST'])
+@api_login_required
+def pay_from_balance():
+    """
+    Pay directly from PocketPay Available Wallet Balance.
+    """
+    data = request.get_json() or {}
+    valid, msg = validate_required_fields(data, ['amount'])
+    if not valid:
+        return error_response(msg, 400)
+
+    try:
+        amount = round(float(data.get('amount', 0)), 2)
+    except (ValueError, TypeError):
+        return error_response('Invalid payment amount', 400)
+
+    recipient = str(data.get('recipient', '')).strip()
+    note = str(data.get('note', data.get('description', ''))).strip()
+    pin = str(data.get('pin', '')).strip()
+
+    if amount <= 0:
+        return error_response('Payment amount must be greater than zero', 400)
+
+    if getattr(current_user, 'transfer_frozen', False):
+        return error_response('Transfers are currently frozen on your account. Unfreeze in Security Centre.', 403, code='TRANSFERS_FROZEN')
+
+    tx_limit = float(getattr(current_user, 'transaction_limit', 100000.0) or 100000.0)
+    if amount > tx_limit:
+        return error_response(f'Payment exceeds your transaction limit of ₹{tx_limit:,.2f}', 400, code='LIMIT_EXCEEDED')
+
+    if current_user.transaction_pin_hash:
+        if not pin:
+            return error_response('Security PIN is required to authorize payment', 400, code='PIN_REQUIRED')
+        success, error = current_user.verify_transaction_pin(pin)
+        if not success:
+            return error_response(error or 'Incorrect security PIN', 401, code='INCORRECT_PIN')
+
+    if current_user.totp_enabled:
+        totp_code = data.get('totp_code') or data.get('totp') or data.get('otp')
+        verified, err, err_code = current_user.verify_totp(totp_code)
+        if not verified:
+            return error_response(err or 'Invalid Authenticator 2FA code', 401, code=err_code or 'INCORRECT_TOTP')
+
+    idemp_key = get_idempotency_key(request, data)
+    idemp_rec = None
+    if idemp_key:
+        idemp_rec, cached_resp = check_idempotency(idemp_key, '/api/transactions/pay-balance', current_user.id, data)
+        if cached_resp:
+            resp_body, resp_code = cached_resp
+            return json_response(resp_body.get('data'), resp_body.get('message'), resp_code)
+
+    available_balance = float(current_user.wallet_balance or 0.0)
+    if available_balance < amount:
+        return error_response(
+            f'Insufficient PocketPay balance. Available: ₹{available_balance:,.2f}, required: ₹{amount:,.2f}.',
+            400,
+            code='INSUFFICIENT_BALANCE',
+            available_balance=available_balance,
+            required_amount=amount,
+            shortage=round(amount - available_balance, 2)
+        )
+
+    try:
+        current_user.wallet_balance = round(available_balance - amount, 2)
+        db.session.flush()
+
+        from app.models.user import User
+        recipient_user = None
+        if recipient:
+            all_other = User.query.filter(User.id != current_user.id).all()
+            clean_rec = recipient.strip().lower()
+            for u in all_other:
+                if (u.virtual_wallet_id and u.virtual_wallet_id.lower() == clean_rec) or \
+                   (u.virtual_upi_id and u.virtual_upi_id.lower() == clean_rec) or \
+                   (u.phone and u.phone.replace(' ', '') == recipient.replace(' ', '')) or \
+                   (u.full_name.strip().lower() == clean_rec) or \
+                   (u.email.strip().lower() == clean_rec):
+                    recipient_user = u
+                    break
+
+        recipient_tx = None
+        if recipient_user:
+            recipient_user.wallet_balance = round(float(recipient_user.wallet_balance or 0.0) + amount, 2)
+            recipient_tx = Transaction(
+                transaction_id=Transaction.generate_transaction_id(),
+                user_id=recipient_user.id,
+                type='peer_receive',
+                amount=amount,
+                category='Payment',
+                merchant=current_user.full_name,
+                description=f'Payment received from {current_user.full_name}' + (f': {note}' if note else ''),
+                payment_method='wallet_balance',
+                status='completed',
+                completed_at=datetime.utcnow(),
+                extra_data={'sender_user_id': current_user.id, 'sender_name': current_user.full_name}
+            )
+            db.session.add(recipient_tx)
+            db.session.flush()
+            recipient_tx.qr_code_url = generate_qr_code(build_qr_tx_url(recipient_tx), 200)
+            Notification.transaction_alert(recipient_user.id, recipient_tx)
+
+        tx = Transaction(
+            transaction_id=Transaction.generate_transaction_id(),
+            user_id=current_user.id,
+            type='expense',
+            source_type='wallet',
+            amount=amount,
+            category=data.get('category', 'Payment'),
+            merchant=recipient or 'Merchant / Recipient',
+            description=note or f'Payment to {recipient or "Recipient"} via PocketPay Balance',
+            payment_method='wallet_balance',
+            status='completed',
+            completed_at=datetime.utcnow(),
+            extra_data={
+                'source': 'wallet',
+                'recipient': recipient,
+                'recipient_user_id': recipient_user.id if recipient_user else None,
+                'balance_before': available_balance,
+                'balance_after': current_user.wallet_balance
+            }
+        )
+        db.session.add(tx)
+        db.session.flush()
+        tx.qr_code_url = generate_qr_code(build_qr_tx_url(tx), 200)
+
+        try:
+            from app.services.ledger_service import LedgerService
+            LedgerService.record_entry(
+                user_id=current_user.id,
+                transaction_id=tx.id,
+                entry_type='DEBIT',
+                amount=amount,
+                source_type='wallet',
+                source_id=current_user.id,
+                description=f'Payment of ₹{amount:,.2f} via PocketPay Balance'
+            )
+            if recipient_user and recipient_tx:
+                LedgerService.record_entry(
+                    user_id=recipient_user.id,
+                    transaction_id=recipient_tx.id,
+                    entry_type='CREDIT',
+                    amount=amount,
+                    source_type='wallet',
+                    source_id=recipient_user.id,
+                    description=f'Payment of ₹{amount:,.2f} from {current_user.full_name}'
+                )
+        except Exception:
+            pass
+
+        Notification.transaction_alert(current_user.id, tx)
+        db.session.commit()
+
+        resp_data = {
+            'transaction_id': tx.transaction_id,
+            'amount': amount,
+            'available_before': available_balance,
+            'remaining_balance': current_user.wallet_balance,
+            'recipient': recipient,
+            'payment_method': 'wallet_balance',
+            'status': 'completed',
+            'timestamp': tx.completed_at.isoformat(),
+            'receipt_qr': tx.qr_code_url,
+            'transaction': tx.to_dict(True)
+        }
+
+        if idemp_rec:
+            save_idempotency(idemp_rec, {'data': resp_data, 'message': f'Payment of ₹{amount:,.2f} confirmed.'}, 201)
+
+        return json_response(resp_data, f'Payment of ₹{amount:,.2f} from PocketPay Balance successful.', 201)
+
+    except Exception as e:
+        db.session.rollback()
+        return error_response(f'Payment failed: {str(e)}', 500)
+
+
 @bp.route('/transfer', methods=['POST'])
 @api_login_required
 def process_transfer():

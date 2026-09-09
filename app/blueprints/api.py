@@ -263,15 +263,18 @@ def dashboard_summary():
 
 @bp.route('/assistant', methods=['POST'])
 @bp.route('/assistant/ask', methods=['POST'])
+@bp.route('/assistant/chat', methods=['POST'])
 def assistant_ask():
     from app.services.assistant_service import AssistantService
     data = request.get_json() or {}
-    query = str(data.get('query', '')).strip()
+    query = str(data.get('query') or data.get('message') or '').strip()
     route = str(data.get('route', 'dashboard')).strip()
     history = data.get('history', [])
     
     user = current_user if current_user.is_authenticated else None
     result = AssistantService.process_query(user, query, route=route, chat_history=history)
+    if isinstance(result, dict) and 'message' in result and 'reply' not in result:
+        result['reply'] = result['message']
     return json_response(result)
 
 

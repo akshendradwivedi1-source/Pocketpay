@@ -63,6 +63,9 @@ def create_app(config_name=None):
     from app.blueprints.qr import bp as qr_bp
     app.register_blueprint(qr_bp, url_prefix='/qr')
 
+    from app.blueprints.premium import bp as premium_bp
+    app.register_blueprint(premium_bp, url_prefix='/api/premium')
+
     # =========================================================================
     # GLOBAL API ERROR HANDLERS (Guarantees JSON responses for API/Auth routes)
     # =========================================================================
@@ -125,12 +128,13 @@ def create_app(config_name=None):
         from sqlalchemy import inspect, text
         db.create_all()
 
-        # 1. Run Alembic migrations automatically on startup
-        try:
-            from flask_migrate import upgrade as flask_migrate_upgrade
-            flask_migrate_upgrade()
-        except Exception as e:
-            app.logger.debug(f"[Alembic Upgrade Info] {e}")
+        # 1. Run Alembic migrations automatically on startup (skip in testing mode)
+        if config_name != 'testing':
+            try:
+                from flask_migrate import upgrade as flask_migrate_upgrade
+                flask_migrate_upgrade()
+            except Exception as e:
+                app.logger.debug(f"[Alembic Upgrade Info] {e}")
 
         # 2. Database-agnostic schema sync fallback (guarantees columns exist on PostgreSQL, SQLite, MySQL)
         try:
@@ -163,6 +167,10 @@ def create_app(config_name=None):
                     alter_statements.append(f"ALTER TABLE users ADD COLUMN security_setup_completed {bool_false}")
                 if 'deleted_at' not in columns:
                     alter_statements.append(f"ALTER TABLE users ADD COLUMN deleted_at {datetime_type}")
+                if 'transfer_frozen' not in columns:
+                    alter_statements.append(f"ALTER TABLE users ADD COLUMN transfer_frozen {bool_false}")
+                if 'transaction_limit' not in columns:
+                    alter_statements.append("ALTER TABLE users ADD COLUMN transaction_limit FLOAT DEFAULT 50000.0")
 
                 for stmt in alter_statements:
                     try:
@@ -170,6 +178,11 @@ def create_app(config_name=None):
                             conn.execute(text(stmt))
                     except Exception as col_err:
                         app.logger.debug(f"[Schema Sync] Notice on '{stmt}': {col_err}")
+
+            try:
+                db.create_all()
+            except Exception:
+                pass
 
             if 'telegram_users' in tables:
                 tg_columns = [c['name'] for c in inspector.get_columns('telegram_users')]

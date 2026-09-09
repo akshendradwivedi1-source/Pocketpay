@@ -507,7 +507,536 @@ PP.Modals = {
     await renderBody();
   },
 
+  // =========================================================================
+  // PART 1: UNIFIED PAYMENT SCREEN (PAY SECURELY)
+  // =========================================================================
+
+  openPaymentHub(opts = {}) {
+    const user = PP.state.user || {};
+    const walletBal = Number(user.wallet_balance || 0);
+    const pockets = PP.state.pockets || [];
+    const activePockets = pockets.filter(p => !p.archived);
+
+    const modal = PP.UI.modal({
+      title: 'PAY SECURELY',
+      subtitle: 'Choose Payment Method',
+      icon: 'shield-check',
+      iconClass: 'bg-accent',
+      size: 'md'
+    });
+
+    const body = PP.el('div', { style: 'display:flex;flex-direction:column;gap:0.85rem' });
+
+    const methods = [
+      {
+        id: 'balance',
+        title: '💰 PocketPay Balance',
+        sub: `Available funds: ₹${PP.fmt(walletBal).replace('₹', '')}`,
+        badge: 'Instant',
+        badgeCls: 'success',
+        fn: () => { modal.close(); PP.Modals.payFromBalance(opts); }
+      },
+      {
+        id: 'pocket',
+        title: '👛 Pay From a Pocket',
+        sub: `${activePockets.length} Active Pocket Envelopes (Travel, Shopping, etc.)`,
+        badge: 'Envelopes',
+        badgeCls: 'primary',
+        fn: () => { modal.close(); PP.Modals.payFromPocket(null, opts); }
+      },
+      {
+        id: 'qr',
+        title: '📷 Scan QR',
+        sub: 'Universal scanner for UPI & PocketPay digital codes',
+        badge: 'Camera',
+        badgeCls: 'accent',
+        fn: () => { modal.close(); PP.Modals.scanAndPay(); }
+      },
+      {
+        id: 'netbanking',
+        title: '🏦 Beneficiary / Netbanking',
+        sub: 'IMPS / NEFT transfer to verified bank accounts',
+        badge: 'Bank Transfer',
+        badgeCls: 'info',
+        fn: () => { modal.close(); PP.Modals.unifiedTransferHub(); }
+      }
+    ];
+
+    methods.forEach(m => {
+      const card = PP.el('button', {
+        class: 'glass-card payment-method-card',
+        style: 'display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:1.1rem 1.25rem;border-radius:14px;border:1px solid var(--border);background:var(--surface);cursor:pointer;width:100%;text-align:left;transition:all 0.2s ease',
+        onclick: m.fn
+      }, [
+        PP.el('div', { style: 'flex:1;min-width:0' }, [
+          PP.el('div', { style: 'display:flex;align-items:center;gap:8px;margin-bottom:4px' }, [
+            PP.el('span', { style: 'font-weight:700;font-size:1rem;color:var(--text)' }, [m.title]),
+            PP.el('span', { class: `chip ${m.badgeCls}`, style: 'font-size:0.68rem;padding:1px 7px' }, [m.badge])
+          ]),
+          PP.el('div', { style: 'font-size:0.8rem;color:var(--text-muted)' }, [m.sub])
+        ]),
+        PP.el('i', { 'data-lucide': 'chevron-right', style: 'color:var(--text-dim);width:18px;height:18px;flex-shrink:0' })
+      ]);
+      body.appendChild(card);
+    });
+
+    modal.body.innerHTML = '';
+    modal.body.appendChild(body);
+    modal.footer.innerHTML = '';
+    modal.footer.appendChild(PP.el('button', { class: 'btn btn-ghost', onclick: () => modal.close() }, ['Close']));
+    PP.refreshIcons();
+  },
+
+  openPayModal(opts = {}) {
+    return PP.Modals.openPaymentHub(opts);
+  },
+
+  // =========================================================================
+  // PART 2: PAY DIRECTLY FROM POCKETS
+  // =========================================================================
+
+  async payFromPocket(preselectedPocketId = null, opts = {}) {
+    const pockets = await PP.PocketsAPI.list({ per_page: 200 }).then(r => r.data.items).catch(() => PP.state.pockets || []) || [];
+    const activePockets = pockets.filter(p => !p.archived);
+    PP.state.pockets = pockets;
+
+    if (!activePockets.length) {
+      PP.UI.toast('No Pockets Available', 'Please create a pocket first before making pocket payments.', 'warning');
+      return PP.Modals.createPocket();
+    }
+
+    let selectedPocketId = preselectedPocketId || activePockets[0]?.id;
+    let step = preselectedPocketId ? 2 : 1;
+    let amount = 0;
+    let recipient = '';
+    let note = '';
+
+    const modal = PP.UI.modal({
+      title: 'Pay From a Pocket',
+      subtitle: 'Real server-side debit from your pocket balance',
+      icon: 'wallet-cards',
+      iconClass: 'bg-primary',
+      size: 'md'
+    });
+
+    const render = () => {
+      const pocket = activePockets.find(p => p.id == selectedPocketId) || activePockets[0];
+      const available = Number(pocket?.current_balance || 0);
+
+      const body = PP.el('div', { style: 'display:flex;flex-direction:column;gap:1.25rem' });
+
+      // STEP 1: Select Pocket
+      if (step === 1) {
+        body.appendChild(PP.el('div', { style: 'font-weight:600;font-size:0.9rem;color:var(--text-muted)' }, ['Select a Pocket to pay from:']));
+        const list = PP.el('div', { style: 'display:flex;flex-direction:column;gap:0.75rem;max-height:360px;overflow-y:auto;padding:2px' });
+        activePockets.forEach(p => {
+          const isSel = p.id == selectedPocketId;
+          const card = PP.el('div', {
+            class: 'glass-card',
+            style: `display:flex;align-items:center;justify-content:space-between;padding:1rem 1.25rem;border-radius:14px;border:${isSel ? '2px solid var(--accent)' : '1px solid var(--border)'};background:${isSel ? 'var(--hover-bg)' : 'var(--surface)'};cursor:pointer;transition:all 0.2s`,
+            onclick: () => { selectedPocketId = p.id; step = 2; render(); }
+          }, [
+            PP.el('div', { style: 'display:flex;align-items:center;gap:1rem' }, [
+              PP.el('div', { style: `width:42px;height:42px;border-radius:12px;background:${p.color || 'var(--accent)'};color:#fff;display:flex;align-items:center;justify-content:center` }, [
+                PP.el('i', { 'data-lucide': p.icon || 'wallet', style: 'width:20px;height:20px' })
+              ]),
+              PP.el('div', {}, [
+                PP.el('div', { style: 'font-weight:700;font-size:1rem;color:var(--text)' }, [p.name]),
+                PP.el('div', { style: 'font-size:0.85rem;color:var(--success);font-weight:600;margin-top:2px' }, [`Available: ₹${PP.fmt(p.current_balance).replace('₹', '')}`])
+              ])
+            ]),
+            PP.el('i', { 'data-lucide': isSel ? 'check-circle-2' : 'chevron-right', style: `color:${isSel ? 'var(--accent)' : 'var(--text-dim)'};width:20px;height:20px` })
+          ]);
+          list.appendChild(card);
+        });
+        body.appendChild(list);
+
+        modal.body.innerHTML = '';
+        modal.body.appendChild(body);
+        modal.footer.innerHTML = '';
+        modal.footer.appendChild(PP.el('button', { class: 'btn btn-ghost', onclick: () => modal.close() }, ['Cancel']));
+        modal.footer.appendChild(PP.el('button', { class: 'btn btn-primary', onclick: () => { step = 2; render(); } }, ['Continue', PP.el('i', { 'data-lucide': 'arrow-right' })]));
+      }
+
+      // STEP 2: Amount & Recipient
+      else if (step === 2) {
+        const pocketHeader = PP.el('div', {
+          class: 'glass-card',
+          style: 'display:flex;align-items:center;justify-content:space-between;padding:0.9rem 1.15rem;border-radius:12px;background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.25)'
+        }, [
+          PP.el('div', { style: 'display:flex;align-items:center;gap:0.75rem' }, [
+            PP.el('div', { style: `width:36px;height:36px;border-radius:10px;background:${pocket.color || 'var(--accent)'};color:#fff;display:flex;align-items:center;justify-content:center` }, [
+              PP.el('i', { 'data-lucide': pocket.icon || 'wallet', style: 'width:18px;height:18px' })
+            ]),
+            PP.el('div', {}, [
+              PP.el('div', { style: 'font-size:0.75rem;color:var(--text-muted);text-transform:uppercase;font-weight:700' }, ['Source Pocket']),
+              PP.el('div', { style: 'font-weight:700;font-size:0.95rem;color:var(--text)' }, [pocket.name])
+            ])
+          ]),
+          PP.el('div', { style: 'text-align:right' }, [
+            PP.el('div', { style: 'font-size:0.75rem;color:var(--text-muted);text-transform:uppercase;font-weight:700' }, ['Available']),
+            PP.el('div', { style: 'font-weight:800;font-size:1.1rem;color:var(--success)' }, [PP.fmt(pocket.current_balance)])
+          ])
+        ]);
+        body.appendChild(pocketHeader);
+
+        const amtGroup = PP.el('div', { class: 'form-group' }, [
+          PP.el('label', { class: 'form-label' }, ['Amount (₹) *']),
+          (() => {
+            const inp = PP.el('input', {
+              class: 'form-input',
+              type: 'number',
+              step: '0.01',
+              placeholder: '₹ 0.00',
+              value: amount > 0 ? amount : '',
+              style: 'font-size:1.4rem;font-weight:700;padding:0.85rem 1rem'
+            });
+            inp.oninput = () => { amount = parseFloat(inp.value) || 0; };
+            setTimeout(() => inp.focus(), 50);
+            return inp;
+          })()
+        ]);
+        body.appendChild(amtGroup);
+
+        const recGroup = PP.el('div', { class: 'form-group' }, [
+          PP.el('label', { class: 'form-label' }, ['Recipient *']),
+          (() => {
+            const inp = PP.el('input', {
+              class: 'form-input',
+              placeholder: 'Recipient Name, UPI ID, or Phone',
+              value: recipient
+            });
+            inp.oninput = () => { recipient = inp.value; };
+            return inp;
+          })()
+        ]);
+        body.appendChild(recGroup);
+
+        const noteGroup = PP.el('div', { class: 'form-group' }, [
+          PP.el('label', { class: 'form-label' }, ['Note (optional)']),
+          (() => {
+            const inp = PP.el('input', {
+              class: 'form-input',
+              placeholder: 'What is this payment for?',
+              value: note
+            });
+            inp.oninput = () => { note = inp.value; };
+            return inp;
+          })()
+        ]);
+        body.appendChild(noteGroup);
+
+        modal.body.innerHTML = '';
+        modal.body.appendChild(body);
+        modal.footer.innerHTML = '';
+        modal.footer.appendChild(PP.el('button', { class: 'btn btn-ghost', onclick: () => { step = 1; render(); } }, [PP.el('i', { 'data-lucide': 'arrow-left' }), 'Change Pocket']));
+        modal.footer.appendChild(PP.el('button', {
+          class: 'btn btn-primary',
+          onclick: () => {
+            if (amount <= 0) return PP.UI.toast('Invalid Amount', 'Please enter a payment amount greater than ₹0.', 'warning');
+            if (amount > available) return PP.UI.toast('Insufficient Funds', `Your ${pocket.name} has only ₹${PP.fmt(available).replace('₹', '')} available.`, 'error');
+            if (!recipient.trim()) return PP.UI.toast('Recipient Required', 'Please enter the recipient name, UPI ID, or phone.', 'warning');
+            step = 3;
+            render();
+          }
+        }, ['Continue', PP.el('i', { 'data-lucide': 'arrow-right' })]));
+      }
+
+      // STEP 3: CONFIRM PAYMENT
+      else if (step === 3) {
+        const remaining = Math.max(0, available - amount);
+
+        const confirmCard = PP.el('div', {
+          class: 'glass-card',
+          style: 'padding:1.5rem;border-radius:16px;border:1.5px solid var(--accent);background:linear-gradient(180deg, rgba(99,102,241,0.06) 0%, var(--surface) 100%);display:flex;flex-direction:column;gap:1.2rem'
+        });
+
+        confirmCard.innerHTML = `
+          <div style="text-align:center;padding-bottom:0.75rem;border-bottom:1px solid var(--border)">
+            <p style="text-transform:uppercase;font-size:0.75rem;letter-spacing:1px;font-weight:700;color:var(--text-muted);margin-bottom:4px">Confirm Payment</p>
+            <h2 style="margin:0;font-size:2.2rem;font-weight:800;color:var(--text)">₹${PP.fmt(amount).replace('₹', '')}</h2>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:0.75rem;font-size:0.9rem">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span style="color:var(--text-muted)">From:</span>
+              <span style="font-weight:700;color:var(--text);display:flex;align-items:center;gap:6px">
+                <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${pocket.color || 'var(--accent)'}"></span>
+                ${pocket.name}
+              </span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span style="color:var(--text-muted)">Available:</span>
+              <span style="font-weight:600;color:var(--text)">₹${PP.fmt(available).replace('₹', '')}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span style="color:var(--text-muted)">Amount:</span>
+              <span style="font-weight:700;color:var(--danger)">- ₹${PP.fmt(amount).replace('₹', '')}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;padding-top:6px;border-top:1px dashed var(--border)">
+              <span style="color:var(--text-muted)">Remaining:</span>
+              <span style="font-weight:800;color:var(--success)">₹${PP.fmt(remaining).replace('₹', '')}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;padding-top:6px;border-top:1px solid var(--border)">
+              <span style="color:var(--text-muted)">To:</span>
+              <span style="font-weight:700;color:var(--text)">${recipient}</span>
+            </div>
+            ${note ? `
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span style="color:var(--text-muted)">Note:</span>
+              <span style="color:var(--text-dim);font-style:italic">${note}</span>
+            </div>` : ''}
+          </div>
+        `;
+        body.appendChild(confirmCard);
+
+        modal.body.innerHTML = '';
+        modal.body.appendChild(body);
+        modal.footer.innerHTML = '';
+        modal.footer.appendChild(PP.el('button', { class: 'btn btn-ghost', onclick: () => { step = 2; render(); } }, ['Cancel']));
+
+        const payBtn = PP.el('button', {
+          class: 'btn btn-danger',
+          style: 'font-weight:700;padding:0.65rem 1.4rem',
+          onclick: async () => {
+            try {
+              const pin = await PP.UI.pinPrompt({
+                title: 'Authorize Pocket Payment',
+                subtitle: `Enter 4-digit PIN to pay ₹${PP.fmt(amount).replace('₹', '')} from ${pocket.name}`
+              });
+              if (!pin) return;
+
+              payBtn.disabled = true;
+              payBtn.innerHTML = '<i data-lucide="loader-2" class="spin"></i> Processing…';
+              PP.refreshIcons();
+
+              const res = await PP.API.post('/api/transactions/pay-pocket', {
+                pocket_id: pocket.id,
+                amount: amount,
+                recipient: recipient,
+                note: note,
+                pin: pin
+              });
+
+              modal.close();
+              PP.UI.showSuccess({
+                title: 'Payment Successful! 🎉',
+                subtitle: `₹${PP.fmt(amount).replace('₹', '')} debited from ${pocket.name}`,
+                qr_code_url: res?.data?.receipt_qr,
+                meta: [
+                  { label: 'Recipient', value: recipient },
+                  { label: 'Source Pocket', value: pocket.name },
+                  { label: 'Amount Paid', value: `₹${PP.fmt(amount).replace('₹', '')}` },
+                  { label: 'Remaining in Pocket', value: `₹${PP.fmt(res?.data?.remaining_balance || remaining).replace('₹', '')}` },
+                  { label: 'Transaction ID', value: res?.data?.transaction_id || 'Completed' }
+                ]
+              });
+
+              opts.onDone?.();
+              PP.emit('transactions:changed');
+              PP.emit('pockets:changed');
+              PP.refreshCurrentView();
+            } catch (err) {
+              PP.UI.toast('Payment Failed', err.message || 'Could not complete pocket payment', 'error');
+              payBtn.disabled = false;
+              payBtn.innerHTML = '<i data-lucide="lock"></i> Confirm & Pay';
+              PP.refreshIcons();
+            }
+          }
+        }, [PP.el('i', { 'data-lucide': 'lock' }), 'Confirm & Pay']);
+
+        modal.footer.appendChild(payBtn);
+      }
+
+      PP.refreshIcons();
+    };
+
+    render();
+  },
+
+  async payFromBalance(opts = {}) {
+    const user = PP.state.user || {};
+    const walletBal = Number(user.wallet_balance || 0);
+
+    let amount = 0;
+    let recipient = '';
+    let note = '';
+    let step = 1;
+
+    const modal = PP.UI.modal({
+      title: 'Pay from PocketPay Balance',
+      subtitle: `Available: ₹${PP.fmt(walletBal).replace('₹', '')}`,
+      icon: 'wallet',
+      iconClass: 'bg-success',
+      size: 'md'
+    });
+
+    const render = () => {
+      const body = PP.el('div', { style: 'display:flex;flex-direction:column;gap:1.25rem' });
+
+      if (step === 1) {
+        body.appendChild(PP.el('div', { class: 'form-group' }, [
+          PP.el('label', { class: 'form-label' }, ['Amount (₹) *']),
+          (() => {
+            const inp = PP.el('input', {
+              class: 'form-input',
+              type: 'number',
+              step: '0.01',
+              placeholder: '₹ 0.00',
+              value: amount > 0 ? amount : '',
+              style: 'font-size:1.4rem;font-weight:700;padding:0.85rem 1rem'
+            });
+            inp.oninput = () => { amount = parseFloat(inp.value) || 0; };
+            setTimeout(() => inp.focus(), 50);
+            return inp;
+          })()
+        ]));
+
+        body.appendChild(PP.el('div', { class: 'form-group' }, [
+          PP.el('label', { class: 'form-label' }, ['Recipient *']),
+          (() => {
+            const inp = PP.el('input', {
+              class: 'form-input',
+              placeholder: 'Recipient Name, UPI ID, or Phone',
+              value: recipient
+            });
+            inp.oninput = () => { recipient = inp.value; };
+            return inp;
+          })()
+        ]));
+
+        body.appendChild(PP.el('div', { class: 'form-group' }, [
+          PP.el('label', { class: 'form-label' }, ['Note (optional)']),
+          (() => {
+            const inp = PP.el('input', {
+              class: 'form-input',
+              placeholder: 'Payment description',
+              value: note
+            });
+            inp.oninput = () => { note = inp.value; };
+            return inp;
+          })()
+        ]));
+
+        modal.body.innerHTML = '';
+        modal.body.appendChild(body);
+        modal.footer.innerHTML = '';
+        modal.footer.appendChild(PP.el('button', { class: 'btn btn-ghost', onclick: () => modal.close() }, ['Cancel']));
+        modal.footer.appendChild(PP.el('button', {
+          class: 'btn btn-primary',
+          onclick: () => {
+            if (amount <= 0) return PP.UI.toast('Invalid Amount', 'Please enter a valid payment amount.', 'warning');
+            if (amount > walletBal) return PP.UI.toast('Insufficient Balance', `You only have ₹${PP.fmt(walletBal).replace('₹', '')} in your PocketPay balance.`, 'error');
+            if (!recipient.trim()) return PP.UI.toast('Recipient Required', 'Please enter the recipient.', 'warning');
+            step = 2;
+            render();
+          }
+        }, ['Continue', PP.el('i', { 'data-lucide': 'arrow-right' })]));
+      } else {
+        const remaining = Math.max(0, walletBal - amount);
+        const confirmCard = PP.el('div', {
+          class: 'glass-card',
+          style: 'padding:1.5rem;border-radius:16px;border:1.5px solid var(--accent);background:linear-gradient(180deg, rgba(99,102,241,0.06) 0%, var(--surface) 100%);display:flex;flex-direction:column;gap:1.2rem'
+        });
+
+        confirmCard.innerHTML = `
+          <div style="text-align:center;padding-bottom:0.75rem;border-bottom:1px solid var(--border)">
+            <p style="text-transform:uppercase;font-size:0.75rem;letter-spacing:1px;font-weight:700;color:var(--text-muted);margin-bottom:4px">Confirm Payment</p>
+            <h2 style="margin:0;font-size:2.2rem;font-weight:800;color:var(--text)">₹${PP.fmt(amount).replace('₹', '')}</h2>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:0.75rem;font-size:0.9rem">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span style="color:var(--text-muted)">From:</span>
+              <span style="font-weight:700;color:var(--text)">PocketPay Available Balance</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span style="color:var(--text-muted)">Available:</span>
+              <span style="font-weight:600;color:var(--text)">₹${PP.fmt(walletBal).replace('₹', '')}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span style="color:var(--text-muted)">Amount:</span>
+              <span style="font-weight:700;color:var(--danger)">- ₹${PP.fmt(amount).replace('₹', '')}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;padding-top:6px;border-top:1px dashed var(--border)">
+              <span style="color:var(--text-muted)">Remaining:</span>
+              <span style="font-weight:800;color:var(--success)">₹${PP.fmt(remaining).replace('₹', '')}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;padding-top:6px;border-top:1px solid var(--border)">
+              <span style="color:var(--text-muted)">To:</span>
+              <span style="font-weight:700;color:var(--text)">${recipient}</span>
+            </div>
+          </div>
+        `;
+        body.appendChild(confirmCard);
+
+        modal.body.innerHTML = '';
+        modal.body.appendChild(body);
+        modal.footer.innerHTML = '';
+        modal.footer.appendChild(PP.el('button', { class: 'btn btn-ghost', onclick: () => { step = 1; render(); } }, ['Cancel']));
+
+        const payBtn = PP.el('button', {
+          class: 'btn btn-danger',
+          style: 'font-weight:700',
+          onclick: async () => {
+            try {
+              const pin = await PP.UI.pinPrompt({
+                title: 'Authorize Payment',
+                subtitle: `Enter PIN to pay ₹${PP.fmt(amount).replace('₹', '')}`
+              });
+              if (!pin) return;
+
+              payBtn.disabled = true;
+              payBtn.innerHTML = '<i data-lucide="loader-2" class="spin"></i> Processing…';
+              PP.refreshIcons();
+
+              const res = await PP.API.post('/api/transactions/pay-balance', {
+                amount: amount,
+                recipient: recipient,
+                note: note,
+                pin: pin
+              });
+
+              modal.close();
+              PP.UI.showSuccess({
+                title: 'Payment Successful! 🎉',
+                subtitle: `₹${PP.fmt(amount).replace('₹', '')} paid from PocketPay Balance`,
+                qr_code_url: res?.data?.receipt_qr,
+                meta: [
+                  { label: 'Recipient', value: recipient },
+                  { label: 'Amount', value: `₹${PP.fmt(amount).replace('₹', '')}` },
+                  { label: 'Remaining Balance', value: `₹${PP.fmt(res?.data?.remaining_balance || remaining).replace('₹', '')}` }
+                ]
+              });
+
+              opts.onDone?.();
+              PP.emit('transactions:changed');
+              PP.refreshCurrentView();
+            } catch (err) {
+              PP.UI.toast('Payment Failed', err.message || 'Could not complete payment', 'error');
+              payBtn.disabled = false;
+              payBtn.innerHTML = '<i data-lucide="lock"></i> Confirm & Pay';
+              PP.refreshIcons();
+            }
+          }
+        }, [PP.el('i', { 'data-lucide': 'lock' }), 'Confirm & Pay']);
+
+        modal.footer.appendChild(payBtn);
+      }
+      PP.refreshIcons();
+    };
+
+    render();
+  },
+
   async addExpense(preselectedPocketId = null, opts = {}) {
+    if (!preselectedPocketId) {
+      return PP.Modals.openPaymentHub(opts);
+    }
+    return PP.Modals.payFromPocket(preselectedPocketId, opts);
+  },
+
+  async legacyAddExpense(preselectedPocketId = null, opts = {}) {
     const pockets = await PP.PocketsAPI.list({ per_page: 200 }).then(r => r.data.items).catch(() => PP.state.pockets || []) || [];
     PP.state.pockets = pockets;
     const categories = PP.state.categories?.length ? PP.state.categories : await PP.WalletAPI.categories().then(r => r.data.categories).catch(() => []) || [];

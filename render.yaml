@@ -52,6 +52,16 @@ services:
         sync: false
       - key: MAIL_DEFAULT_SENDER
         value: PocketPay <noreply@pocketpay.app>
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      - key: RAZORPAY_WEBHOOK_SECRET
+        sync: false
+      - key: PREMIUM_MONTHLY_PRICE
+        value: "99"
+      - key: PREMIUM_YEARLY_PRICE
+        value: "799"
 
 # 2. Managed PostgreSQL Database
 databases:

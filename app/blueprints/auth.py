@@ -331,6 +331,20 @@ def login():
     except Exception:
         pass
     
+    try:
+        from app.models.subscription import LoginEvent
+        event = LoginEvent(
+            user_id=user.id,
+            ip_address=request.remote_addr or '127.0.0.1',
+            user_agent=request.user_agent.string[:255] if request.user_agent else 'Browser',
+            device_type='Mobile' if 'Mobile' in (request.user_agent.string if request.user_agent else '') else 'Desktop',
+            status='SUCCESS'
+        )
+        db.session.add(event)
+        db.session.commit()
+    except Exception:
+        pass
+    
     is_sec_required = user.security_setup_required
     return json_response({
         'user': user.to_dict(),
@@ -448,6 +462,7 @@ def resend_otp():
 
 
 @bp.route('/setup-pin', methods=['POST'])
+@bp.route('/set-transaction-pin', methods=['POST'])
 @api_login_required
 def setup_pin():
     data = request.get_json() or {}
@@ -1353,6 +1368,74 @@ def send_phone_otp():
         'phone': current_user.phone,
         'simulated_otp': otp
     }, f'6-digit verification code sent to {current_user.phone}')
+
+
+# =============================================================================
+# PART 23: PREMIUM SECURITY CENTRE
+# =============================================================================
+
+@bp.route('/security/centre', methods=['GET'])
+@api_login_required
+def get_security_centre():
+    """Returns user's security center data: sessions, login history, limits, freeze state"""
+    from app.models.subscription import LoginEvent
+    events = LoginEvent.query.filter_by(user_id=current_user.id).order_by(LoginEvent.created_at.desc()).limit(20).all()
+    return json_response({
+        'transfer_frozen': bool(getattr(current_user, 'transfer_frozen', False)),
+        'transaction_limit': float(getattr(current_user, 'transaction_limit', 100000.0)),
+        'totp_enabled': bool(current_user.totp_enabled),
+        'has_transaction_pin': bool(current_user.transaction_pin_hash),
+        'login_events': [e.to_dict() for e in events],
+        'active_session': {
+            'ip': request.remote_addr or '127.0.0.1',
+            'device': 'Current Browser',
+            'status': 'Active'
+        }
+    })
+
+
+@bp.route('/security/toggle-freeze', methods=['POST'])
+@api_login_required
+def toggle_transfer_freeze():
+    """Emergency transfer freeze / unfreeze toggle"""
+    data = request.get_json() or {}
+    pin = str(data.get('pin', '')).strip()
+
+    if current_user.transaction_pin_hash:
+        if not pin:
+            return error_response('Security PIN is required to change transfer freeze status', 400, code='PIN_REQUIRED')
+        success, err = current_user.verify_transaction_pin(pin)
+        if not success:
+            return error_response(err or 'Incorrect PIN', 401, code='INCORRECT_PIN')
+
+    current_user.transfer_frozen = not getattr(current_user, 'transfer_frozen', False)
+    db.session.commit()
+
+    action_str = "frozen" if current_user.transfer_frozen else "unfrozen"
+    return json_response({
+        'transfer_frozen': current_user.transfer_frozen
+    }, f"Transfers on your account have been {action_str}.")
+
+
+@bp.route('/security/set-limit', methods=['POST'])
+@api_login_required
+def set_transaction_limit():
+    """Sets user's custom daily transaction limit"""
+    data = request.get_json() or {}
+    try:
+        limit = round(float(data.get('limit', 100000.0)), 2)
+    except (ValueError, TypeError):
+        return error_response('Invalid limit amount', 400)
+
+    if limit <= 0:
+        return error_response('Transaction limit must be greater than zero', 400)
+
+    current_user.transaction_limit = limit
+    db.session.commit()
+    return json_response({
+        'transaction_limit': current_user.transaction_limit
+    }, f"Daily transaction limit updated to ₹{limit:,.2f}.")
+
 
 
 

@@ -68,11 +68,50 @@ class User(UserMixin, db.Model):
     deleted_at = db.Column(db.DateTime, nullable=True)  # Soft-delete timestamp; None = active
 
     
+    transfer_frozen = db.Column(db.Boolean, default=False)
+    transaction_limit = db.Column(db.Float, default=100000.0)
+
     pockets = db.relationship('Pocket', back_populates='user', cascade='all, delete-orphan', lazy='dynamic')
     transactions = db.relationship('Transaction', back_populates='user', cascade='all, delete-orphan', lazy='dynamic')
     distribution_rules = db.relationship('DistributionRule', back_populates='user', cascade='all, delete-orphan', lazy='dynamic')
     notifications = db.relationship('Notification', back_populates='user', cascade='all, delete-orphan', lazy='dynamic')
     budgets = db.relationship('Budget', back_populates='user', cascade='all, delete-orphan', lazy='dynamic')
+    subscriptions = db.relationship('Subscription', back_populates='user', cascade='all, delete-orphan', lazy='dynamic')
+    pocket_rules = db.relationship('PocketRule', back_populates='user', cascade='all, delete-orphan', lazy='dynamic')
+    login_events = db.relationship('LoginEvent', back_populates='user', cascade='all, delete-orphan', lazy='dynamic')
+
+    @property
+    def current_subscription(self):
+        try:
+            from app.models.subscription import Subscription
+            active_sub = self.subscriptions.filter_by(status='ACTIVE').order_by(Subscription.created_at.desc()).first()
+            if active_sub:
+                if active_sub.expiry_date and active_sub.expiry_date < datetime.utcnow():
+                    active_sub.status = 'EXPIRED'
+                    self.is_premium = False
+                    db.session.commit()
+                    return active_sub
+                return active_sub
+            return self.subscriptions.order_by(Subscription.created_at.desc()).first()
+        except Exception:
+            return None
+
+    @property
+    def is_premium_active(self):
+        if not self.is_premium:
+            return False
+        sub = self.current_subscription
+        if sub and sub.status == 'ACTIVE':
+            if sub.expiry_date and sub.expiry_date < datetime.utcnow():
+                sub.status = 'EXPIRED'
+                self.is_premium = False
+                try:
+                    db.session.commit()
+                except Exception:
+                    pass
+                return False
+            return True
+        return bool(self.is_premium)
     
     @property
     def password(self):
@@ -436,7 +475,11 @@ class User(UserMixin, db.Model):
             'virtual_upi_id': self.virtual_upi_id,
             'email_verified': self.email_verified,
             'phone_verified': self.phone_verified,
-            'is_premium': self.is_premium,
+            'is_premium': self.is_premium_active,
+            'subscription_status': self.current_subscription.status if self.current_subscription else ('ACTIVE' if self.is_premium else 'NONE'),
+            'subscription': self.current_subscription.to_dict() if self.current_subscription else None,
+            'transfer_frozen': bool(getattr(self, 'transfer_frozen', False)),
+            'transaction_limit': float(getattr(self, 'transaction_limit', 100000.0)),
             'is_admin': bool(self.is_admin),
             'has_transaction_pin': self.transaction_pin_hash is not None,
             'security_setup_completed': is_sec_setup,

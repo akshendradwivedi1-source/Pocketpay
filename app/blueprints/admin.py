@@ -1137,3 +1137,78 @@ def api_resolve_escalate(tx_id):
     except Exception as e:
         db.session.rollback()
         return error_response(f'Escalate failed: {str(e)}', 500)
+
+
+# =============================================================================
+# PARTS 12 & 25: ADMIN PREMIUM SUBSCRIPTION & REVENUE REPORTING
+# =============================================================================
+
+@bp.route('/api/subscriptions', methods=['GET'])
+@api_admin_required
+def api_admin_subscriptions():
+    """Returns list of all user subscriptions with sanitized payment references"""
+    from app.models.subscription import Subscription
+    subs = Subscription.query.order_by(Subscription.created_at.desc()).limit(100).all()
+    results = []
+    for s in subs:
+        d = s.to_dict()
+        user = User.query.get(s.user_id)
+        d['user_name'] = user.full_name if user else 'Unknown User'
+        d['user_email'] = user.email if user else 'N/A'
+        results.append(d)
+
+    return json_response({
+        'subscriptions': results,
+        'count': len(results)
+    })
+
+
+@bp.route('/api/premium/stats', methods=['GET'])
+@api_admin_required
+def api_admin_premium_stats():
+    """Returns revenue, active subscribers, failed payments, and gateway status"""
+    from app.models.subscription import Subscription
+    from app.services.premium_service import PremiumService
+    from sqlalchemy import func
+
+    # Revenue
+    rev_monthly = db.session.query(func.sum(Subscription.amount)).filter(
+        Subscription.status == 'ACTIVE',
+        Subscription.plan_id == 'monthly'
+    ).scalar() or 0.0
+
+    rev_yearly = db.session.query(func.sum(Subscription.amount)).filter(
+        Subscription.status == 'ACTIVE',
+        Subscription.plan_id == 'yearly'
+    ).scalar() or 0.0
+
+    total_revenue = round(float(rev_monthly) + float(rev_yearly), 2)
+
+    # Counts
+    active_count = Subscription.query.filter_by(status='ACTIVE').count()
+    expired_count = Subscription.query.filter_by(status='EXPIRED').count()
+    cancelled_count = Subscription.query.filter_by(status='CANCELLED').count()
+    failed_count = Subscription.query.filter_by(status='PAYMENT_FAILED').count()
+    pending_count = Subscription.query.filter_by(status='PENDING').count()
+
+    gateway_creds = PremiumService.get_gateway_credentials()
+    plans = PremiumService.get_plans()
+
+    return json_response({
+        'total_revenue': total_revenue,
+        'monthly_revenue': round(float(rev_monthly), 2),
+        'yearly_revenue': round(float(rev_yearly), 2),
+        'active_subscribers': active_count,
+        'expired_subscribers': expired_count,
+        'cancelled_subscriptions': cancelled_count,
+        'failed_payments': failed_count,
+        'pending_payments': pending_count,
+        'gateway_status': {
+            'provider': gateway_creds['provider'],
+            'is_live': gateway_creds['is_live'],
+            'has_credentials': gateway_creds['has_credentials'],
+            'key_id_masked': '••••' + gateway_creds['key_id'][-6:] if gateway_creds['key_id'] else 'Not set'
+        },
+        'plans': plans
+    })
+

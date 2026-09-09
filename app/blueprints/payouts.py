@@ -194,12 +194,17 @@ def transfer_to_bank():
         if not verified:
             return error_response(err or 'Invalid Authenticator 2FA code', 401, code=err_code or 'INCORRECT_TOTP')
             
+    source_type = str(data.get('source_type', 'wallet')).strip()
+    pocket_id = data.get('pocket_id')
+
     res = PayoutProvider.execute_bank_payout(
         user=current_user,
         amount=amount,
         beneficiary=beneficiary,
         mode=mode,
-        idempotency_key=idempotency_key
+        idempotency_key=idempotency_key,
+        source_type=source_type,
+        pocket_id=pocket_id
     )
     
     if not res.get('success'):
@@ -225,6 +230,8 @@ def netbanking_transfer():
     
     amount = float(data.get('amount', 0))
     idempotency_key = data.get('idempotency_key')
+    source_type = str(data.get('source_type', 'wallet')).strip()
+    pocket_id = data.get('pocket_id')
     
     beneficiary = {
         'account_number': str(data.get('account_number', '')).strip(),
@@ -254,7 +261,9 @@ def netbanking_transfer():
         amount=amount,
         beneficiary=beneficiary,
         mode='NETBANKING',
-        idempotency_key=idempotency_key
+        idempotency_key=idempotency_key,
+        source_type=source_type,
+        pocket_id=pocket_id
     )
     
     if not res.get('success'):
