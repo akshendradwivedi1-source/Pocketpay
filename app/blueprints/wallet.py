@@ -1,7 +1,7 @@
 import re
 from flask import Blueprint, request
 from flask_login import current_user
-from datetime import datetime
+from datetime import datetime, timedelta
 from app.extensions import db
 from app.models.user import User
 from app.models.pocket import Pocket
@@ -9,6 +9,8 @@ from app.models.transaction import Transaction, EXPENSE_CATEGORIES
 from app.models.distribution_rule import DistributionRule
 from app.models.notification import Notification
 from app.models.money_request import MoneyRequest
+from app.services.ledger_service import LedgerService, FinancialInvariantError
+from app.utils.idempotency import get_idempotency_key, check_idempotency, save_idempotency
 from app.utils.helpers import (
     json_response, error_response, validate_required_fields,
     api_login_required, get_paginated_query, paginated_response, generate_qr_code,
@@ -18,15 +20,13 @@ from app.utils.helpers import (
 bp = Blueprint('wallet', __name__)
 
 
-
-
-
 @bp.route('/balance', methods=['GET'])
 @api_login_required
 def get_wallet_balance():
     pockets = Pocket.query.filter_by(user_id=current_user.id, archived=False).all()
-    pocket_balance = sum(p.current_balance for p in pockets)
-    wallet_balance = current_user.wallet_balance or 0.0
+    pocket_balance = round(sum(float(p.current_balance or 0.0) for p in pockets), 2)
+    wallet_balance = round(float(current_user.wallet_balance or 0.0), 2)
+    total_funds = round(wallet_balance + pocket_balance, 2)
     
     # Calculate start of current month and start of next month portably across SQLite & PostgreSQL
     now = datetime.utcnow()
@@ -53,9 +53,11 @@ def get_wallet_balance():
         ).scalar() or 0.0
     
     return json_response({
+        'available_balance': wallet_balance,
         'wallet_balance': wallet_balance,
         'pocket_balance': pocket_balance,
-        'total_balance': wallet_balance + pocket_balance,
+        'total_funds': total_funds,
+        'total_balance': total_funds,
         'total_pockets': len(pockets),
         'monthly_income': float(month_income),
         'monthly_expense': float(month_expense),
@@ -744,7 +746,7 @@ def send_money():
     """
     Transfers money directly between PocketPay users.
     Verifies Transaction PIN and 2FA TOTP before executing transfer.
-    Atomically debits sender and credits recipient with dual ledger records.
+    Atomically debits sender and credits recipient via LedgerService with dual ledger records.
     """
     data = request.get_json() or {}
     valid, msg = validate_required_fields(data, ['recipient', 'amount', 'pin'])
@@ -783,7 +785,16 @@ def send_money():
         verified, err, err_code = current_user.verify_totp(totp_code)
         if not verified:
             return error_response(err or 'Invalid Authenticator 2FA code', 401, code=err_code or 'INCORRECT_TOTP')
-            
+
+    # Idempotency check
+    idemp_key = get_idempotency_key(request, data)
+    idemp_rec = None
+    if idemp_key:
+        idemp_rec, cached_resp = check_idempotency(idemp_key, '/api/wallet/send-money', current_user.id, data)
+        if cached_resp:
+            resp_body, resp_code = cached_resp
+            return json_response(resp_body.get('data'), resp_body.get('message'), resp_code)
+
     # Resolve recipient
     recipient_identifier = str(data.get('recipient', '')).strip()
     clean_q = recipient_identifier.lower()
@@ -814,103 +825,46 @@ def send_money():
         return error_response('Recipient account is inactive or suspended', 400, code='RECIPIENT_INACTIVE')
         
     pocket_raw = data.get('pocket_id')
-    pocket_id = None
+    source_pocket = None
     if pocket_raw is not None and str(pocket_raw).strip() != '' and str(pocket_raw).lower() != 'wallet':
         try:
-            pocket_id = int(pocket_raw)
+            p_id = int(pocket_raw)
+            source_pocket = Pocket.query.filter_by(id=p_id, user_id=current_user.id, archived=False).first()
+            if not source_pocket:
+                return error_response('Selected funding pocket not found', 404)
         except (ValueError, TypeError):
-            pocket_id = None
+            source_pocket = None
 
     note = str(data.get('note', '')).strip() or f'Transfer to {recipient.full_name}'
     
     try:
-        # Source funds deduction
-        source_pocket = None
-        if pocket_id:
-            source_pocket = Pocket.query.filter_by(id=pocket_id, user_id=current_user.id, archived=False).first()
-            if not source_pocket:
-                return error_response('Selected funding pocket not found', 404)
-            if source_pocket.current_balance < amount:
-                return error_response(f'Insufficient balance in {source_pocket.name} (Balance: ₹{source_pocket.current_balance:,.2f})', 400,
-                                      code='INSUFFICIENT_POCKET_BALANCE')
-            source_pocket.deduct_money(amount)
-        else:
-            if (current_user.wallet_balance or 0.0) < amount:
-                return error_response(f'Insufficient available wallet balance (Available: ₹{current_user.wallet_balance:,.2f})', 400,
-                                      code='INSUFFICIENT_BALANCE')
-            current_user.wallet_balance = round(current_user.wallet_balance - amount, 2)
-            
-        # Credit recipient wallet
-        recipient.wallet_balance = round((recipient.wallet_balance or 0.0) + amount, 2)
-        
-        # Outgoing transaction for sender
-        tx_sender = Transaction(
-            transaction_id=Transaction.generate_transaction_id(),
-            user_id=current_user.id,
-            type='peer_send',
+        res = LedgerService.transfer_p2p(
+            sender=current_user,
+            recipient=recipient,
             amount=amount,
-            from_pocket_id=source_pocket.id if source_pocket else None,
-            category='Transfer to Friend',
-            merchant=recipient.full_name,
-            description=note,
-            payment_method='pocketpay_p2p',
-            extra_data={
-                'peer_user_id': recipient.id,
-                'peer_name': recipient.full_name,
-                'peer_upi': recipient.virtual_upi_id,
-                'is_p2p': True
-            }
+            source_pocket=source_pocket,
+            note=note,
+            idempotency_key=idemp_key
         )
-        tx_sender.qr_code_url = build_qr_tx_url(tx_sender)
-        db.session.add(tx_sender)
-        tx_sender.complete()
-        
-        # Incoming transaction for recipient
-        tx_recipient = Transaction(
-            transaction_id=Transaction.generate_transaction_id(),
-            user_id=recipient.id,
-            type='peer_receive',
-            amount=amount,
-            category='Received from Friend',
-            merchant=current_user.full_name,
-            description=note,
-            payment_method='pocketpay_p2p',
-            extra_data={
-                'peer_user_id': current_user.id,
-                'peer_name': current_user.full_name,
-                'peer_upi': current_user.virtual_upi_id,
-                'is_p2p': True
-            }
-        )
-        tx_recipient.qr_code_url = build_qr_tx_url(tx_recipient)
-        db.session.add(tx_recipient)
-        tx_recipient.complete()
-        
-        # Notifications (staged without immediate commit)
-        Notification.transaction_alert(current_user.id, tx_sender, commit=False)
-        Notification.create(
-            current_user.id,
-            'Money Sent',
-            f'₹{amount:,.2f} sent to {recipient.full_name} ({recipient.virtual_upi_id or recipient.email}).',
-            'success',
-            'high',
-            commit=False
-        )
-        
-        Notification.transaction_alert(recipient.id, tx_recipient, commit=False)
-        Notification.create(
-            recipient.id,
-            'Money Received! 💰',
-            f'You received ₹{amount:,.2f} from {current_user.full_name} ({current_user.virtual_upi_id or current_user.email}).',
-            'success',
-            'high',
-            commit=False
-        )
-        
-        db.session.commit()
 
-        # Generate base64 QR for receipt display in response
+        tx_sender = res['sender_transaction']
         receipt_qr = generate_qr_code(build_qr_tx_url(tx_sender), 250) or tx_sender.qr_code_url
+
+        resp_data = {
+            'transaction': tx_sender.to_dict(True),
+            'recipient': {
+                'id': recipient.id,
+                'full_name': recipient.full_name,
+                'virtual_upi_id': recipient.virtual_upi_id
+            },
+            'wallet_balance': current_user.wallet_balance,
+            'total_funds': current_user.to_dict()['total_funds'],
+            'pocket_balance': source_pocket.current_balance if source_pocket else None,
+            'receipt_qr': receipt_qr
+        }
+
+        if idemp_rec:
+            save_idempotency(idemp_rec, {'data': resp_data, 'message': f'₹{amount:,.2f} sent successfully to {recipient.full_name}'}, 201)
 
         # Instant Telegram notification dispatch (non-blocking / safe)
         try:
@@ -930,21 +884,12 @@ def send_money():
                 )
         except Exception:
             pass
-        
-        return json_response({
-            'transaction': tx_sender.to_dict(True),
-            'recipient': {
-                'id': recipient.id,
-                'full_name': recipient.full_name,
-                'virtual_upi_id': recipient.virtual_upi_id
-            },
-            'wallet_balance': current_user.wallet_balance,
-            'pocket_balance': source_pocket.current_balance if source_pocket else None,
-            'receipt_qr': receipt_qr
-        }, f'₹{amount:,.2f} sent successfully to {recipient.full_name}', 201)
 
+        return json_response(resp_data, f'₹{amount:,.2f} sent successfully to {recipient.full_name}', 201)
+
+    except FinancialInvariantError as fe:
+        return error_response(str(fe), 400, code='INSUFFICIENT_BALANCE')
     except Exception as e:
-        db.session.rollback()
         return error_response(f'Transfer failed: {str(e)}', 500)
 
 
@@ -953,6 +898,7 @@ def send_money():
 def request_money():
     """
     Creates a new peer-to-peer money request to another PocketPay user.
+    Supports targeting an optional pocket and setting an expiry window.
     """
     data = request.get_json() or {}
     recipient_identifier = str(data.get('recipient') or data.get('target') or '').strip()
@@ -963,9 +909,15 @@ def request_money():
     if not valid:
         return error_response(msg, 400)
         
-    amount = float(data.get('amount', 0))
+    try:
+        amount = round(float(data.get('amount', 0)), 2)
+    except (ValueError, TypeError):
+        return error_response('Invalid request amount', 400)
+
     if amount <= 0:
         return error_response('Request amount must be positive', 400)
+    if amount < 1.0:
+        return error_response('Minimum money request amount is ₹1.00', 400)
         
     clean_q = recipient_identifier.lower()
     clean_phone = re.sub(r'[\s\-]', '', recipient_identifier)
@@ -985,14 +937,30 @@ def request_money():
     if target.id == current_user.id:
         return error_response('Cannot request money from yourself', 400)
         
+    target_pocket_id = data.get('target_pocket_id')
+    target_pocket = None
+    if target_pocket_id:
+        target_pocket = Pocket.query.filter_by(id=target_pocket_id, user_id=current_user.id, archived=False).first()
+
     note = str(data.get('note', '')).strip() or f'Money request from {current_user.full_name}'
     
+    expiry_days = 7
+    try:
+        if data.get('expiry_days'):
+            expiry_days = max(1, min(30, int(data.get('expiry_days'))))
+    except (ValueError, TypeError):
+        pass
+
+    expires_at = datetime.utcnow() + timedelta(days=expiry_days)
+
     req = MoneyRequest(
         requester_id=current_user.id,
         target_user_id=target.id,
         amount=amount,
+        target_pocket_id=target_pocket.id if target_pocket else None,
         note=note,
-        status='pending'
+        status='pending',
+        expires_at=expires_at
     )
     db.session.add(req)
     db.session.commit()
@@ -1015,7 +983,7 @@ def request_money():
 @api_login_required
 def list_money_requests():
     """
-    Retrieves incoming and outgoing peer money requests.
+    Retrieves incoming and outgoing peer money requests with live expiry status check.
     """
     req_type = request.args.get('type', 'all').lower()
     status_filter = request.args.get('status', 'all').lower()
@@ -1031,11 +999,16 @@ def list_money_requests():
             (MoneyRequest.requester_id == current_user.id)
         )
         
+    all_reqs = query.order_by(MoneyRequest.created_at.desc()).all()
+    
+    # Run expiry check on pending requests
+    for r in all_reqs:
+        r.check_and_update_expiry()
+
     if status_filter != 'all':
-        query = query.filter_by(status=status_filter)
-        
-    query = query.order_by(MoneyRequest.created_at.desc())
-    requests_list = [r.to_dict() for r in query.all()]
+        requests_list = [r.to_dict() for r in all_reqs if r.status == status_filter]
+    else:
+        requests_list = [r.to_dict() for r in all_reqs]
     
     pending_incoming = sum(1 for r in requests_list if r['target_user_id'] == current_user.id and r['status'] == 'pending')
     
@@ -1050,11 +1023,18 @@ def list_money_requests():
 @api_login_required
 def pay_money_request(req_id):
     """
-    Approves and pays a pending money request from available balance or selected pocket.
+    Approves and pays a pending money request via LedgerService.
+    Supports funding from Available Balance or a Pocket, and optionally crediting the requester's target pocket.
     """
-    req = MoneyRequest.query.filter_by(id=req_id, target_user_id=current_user.id, status='pending').first()
+    req = MoneyRequest.query.filter_by(id=req_id, target_user_id=current_user.id).first()
     if not req:
-        return error_response('Pending money request not found', 404)
+        return error_response('Money request not found', 404)
+
+    if req.status == 'expired' or req.check_and_update_expiry():
+        return error_response('This money request has expired', 400, code='REQUEST_EXPIRED')
+
+    if req.status != 'pending':
+        return error_response(f'Money request has already been {req.status}', 400, code='REQUEST_NOT_PENDING')
         
     data = request.get_json() or {}
     valid, msg = validate_required_fields(data, ['pin'])
@@ -1067,101 +1047,98 @@ def pay_money_request(req_id):
         
     pin_ok, pin_err = current_user.verify_transaction_pin(pin)
     if not pin_ok:
-        return error_response(pin_err or 'Incorrect PIN', 401, code='INCORRECT_PIN')
+        return error_response(pin_err or 'Incorrect PIN', 401, code='INCORRECT_PIN',
+                              pin_attempts=current_user.pin_attempts,
+                              pin_locked_until=current_user.pin_locked_until.isoformat() if current_user.pin_locked_until else None)
         
     if current_user.totp_enabled:
         totp_code = data.get('totp_code') or data.get('totp') or data.get('otp')
+        if not totp_code:
+            return error_response('Google Authenticator 2FA code is required', 400, code='TOTP_REQUIRED')
         verified, err, err_code = current_user.verify_totp(totp_code)
         if not verified:
             return error_response(err or 'Invalid Authenticator 2FA code', 401, code=err_code or 'INCORRECT_TOTP')
+
+    # Idempotency
+    idemp_key = get_idempotency_key(request, data)
+    idemp_rec = None
+    if idemp_key:
+        idemp_rec, cached_resp = check_idempotency(idemp_key, f'/api/wallet/requests/{req_id}/pay', current_user.id, data)
+        if cached_resp:
+            resp_body, resp_code = cached_resp
+            return json_response(resp_body.get('data'), resp_body.get('message'), resp_code)
             
-    amount = req.amount
+    amount = float(req.amount)
     pocket_id = data.get('pocket_id')
     source_pocket = None
     
     if pocket_id:
         source_pocket = Pocket.query.filter_by(id=pocket_id, user_id=current_user.id, archived=False).first()
         if not source_pocket:
-            return error_response('Selected pocket not found', 404)
-        if source_pocket.current_balance < amount:
+            return error_response('Selected funding pocket not found', 404)
+        if float(source_pocket.current_balance or 0) < amount:
             return error_response(f'Insufficient balance in {source_pocket.name}', 400, code='INSUFFICIENT_POCKET_BALANCE')
-        source_pocket.deduct_money(amount)
-    else:
-        if (current_user.wallet_balance or 0.0) < amount:
-            return error_response(f'Insufficient wallet balance (Available: ₹{current_user.wallet_balance:,.2f})', 400, code='INSUFFICIENT_BALANCE')
-        current_user.wallet_balance = round(current_user.wallet_balance - amount, 2)
-        
-    requester = req.requester
-    requester.wallet_balance = round((requester.wallet_balance or 0.0) + amount, 2)
-    
-    # Sender transaction
-    tx_sender = Transaction(
-        transaction_id=Transaction.generate_transaction_id(),
-        user_id=current_user.id,
-        type='peer_send',
-        amount=amount,
-        from_pocket_id=source_pocket.id if source_pocket else None,
-        category='Money Request Paid',
-        merchant=requester.full_name,
-        description=f'Paid money request: {req.note or "Requested amount"}',
-        payment_method='pocketpay_p2p',
-        extra_data={'request_id': req.id, 'peer_user_id': requester.id}
-    )
-    tx_sender.qr_code_url = build_qr_tx_url(tx_sender)
-    db.session.add(tx_sender)
-    tx_sender.complete()
-    
-    # Requester transaction
-    tx_requester = Transaction(
-        transaction_id=Transaction.generate_transaction_id(),
-        user_id=requester.id,
-        type='peer_receive',
-        amount=amount,
-        category='Money Request Received',
-        merchant=current_user.full_name,
-        description=f'Received payment for request: {req.note or "Requested amount"}',
-        payment_method='pocketpay_p2p',
-        extra_data={'request_id': req.id, 'peer_user_id': current_user.id}
-    )
-    tx_requester.qr_code_url = build_qr_tx_url(tx_requester)
-    db.session.add(tx_requester)
-    tx_requester.complete()
-    
-    # Update request
-    req.status = 'paid'
-    req.responded_at = datetime.utcnow()
-    req.transaction_id = tx_sender.transaction_id
-    
-    Notification.transaction_alert(current_user.id, tx_sender, commit=False)
-    Notification.create(
-        current_user.id,
-        'Request Paid',
-        f'You paid ₹{amount:,.2f} to {requester.full_name}.',
-        'success',
-        'high',
-        commit=False
-    )
-    
-    Notification.transaction_alert(requester.id, tx_requester, commit=False)
-    Notification.create(
-        requester.id,
-        'Money Request Paid! 💰',
-        f'{current_user.full_name} accepted and paid your request for ₹{amount:,.2f}.',
-        'success',
-        'high',
-        commit=False
-    )
-    
-    db.session.commit()
 
-    receipt_qr = generate_qr_code(build_qr_tx_url(tx_sender), 250) or tx_sender.qr_code_url
-    
-    return json_response({
-        'request': req.to_dict(),
-        'transaction': tx_sender.to_dict(True),
-        'wallet_balance': current_user.wallet_balance,
-        'receipt_qr': receipt_qr
-    }, f'₹{amount:,.2f} paid successfully to {requester.full_name}')
+    requester = req.requester
+    dest_pocket = None
+    if req.target_pocket_id and req.target_pocket and not req.target_pocket.archived:
+        dest_pocket = req.target_pocket
+
+    note = f'Paid money request: {req.note or "Requested amount"}'
+
+    try:
+        res = LedgerService.transfer_p2p(
+            sender=current_user,
+            recipient=requester,
+            amount=amount,
+            source_pocket=source_pocket,
+            dest_pocket=dest_pocket,
+            note=note,
+            idempotency_key=idemp_key
+        )
+
+        tx_sender = res['sender_transaction']
+        tx_recipient = res['recipient_transaction']
+
+        # Update money request record
+        req.status = 'paid'
+        req.responded_at = datetime.utcnow()
+        req.transaction_id = tx_sender.transaction_id
+        db.session.commit()
+
+        receipt_qr = generate_qr_code(build_qr_tx_url(tx_sender), 250) or tx_sender.qr_code_url
+        
+        resp_data = {
+            'request': req.to_dict(),
+            'transaction': tx_sender.to_dict(True),
+            'wallet_balance': current_user.wallet_balance,
+            'total_funds': current_user.to_dict()['total_funds'],
+            'receipt_qr': receipt_qr
+        }
+
+        if idemp_rec:
+            save_idempotency(idemp_rec, {'data': resp_data, 'message': f'₹{amount:,.2f} paid successfully to {requester.full_name}'}, 200)
+
+        # Notify via Telegram if configured
+        try:
+            from app.telegram.service import TelegramService
+            if TelegramService.is_configured():
+                TelegramService.send_event_notification(
+                    requester,
+                    "Money Request Paid! 💰",
+                    f"<b>{current_user.full_name}</b> paid your request for <b>₹{amount:,.2f}</b>.",
+                    "success"
+                )
+        except Exception:
+            pass
+
+        return json_response(resp_data, f'₹{amount:,.2f} paid successfully to {requester.full_name}')
+
+    except FinancialInvariantError as fe:
+        return error_response(str(fe), 400, code='INSUFFICIENT_BALANCE')
+    except Exception as e:
+        db.session.rollback()
+        return error_response(f'Payment failed: {str(e)}', 500)
 
 
 @bp.route('/requests/<int:req_id>/decline', methods=['POST'])
@@ -1181,7 +1158,7 @@ def decline_money_request(req_id):
     Notification.create(
         req.requester_id,
         'Money Request Declined',
-        f'{current_user.full_name} declined your money request for ₹{req.amount:,.2f}.',
+        f'{current_user.full_name} declined your money request for ₹{float(req.amount):,.2f}.',
         'info',
         'medium'
     )
@@ -1189,4 +1166,16 @@ def decline_money_request(req_id):
     return json_response({
         'request': req.to_dict()
     }, 'Money request declined')
+
+
+@bp.route('/reconciliation', methods=['GET'])
+@api_login_required
+def get_reconciliation():
+    """
+    Returns real-time financial integrity audit and ledger reconciliation for the current user.
+    Ensures: Available Balance + Sum(Active Pockets) == Total Funds and matches historical ledger debits & credits.
+    """
+    report = LedgerService.reconcile_user_account(current_user)
+    return json_response(report, 'Reconciliation report generated successfully')
+
 

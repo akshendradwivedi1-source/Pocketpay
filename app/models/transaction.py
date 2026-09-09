@@ -48,11 +48,18 @@ class Transaction(db.Model):
     type = db.Column(db.String(20), nullable=False, default='expense')
     status = db.Column(db.String(20), nullable=False, default='completed')
     
-    amount = db.Column(db.Float, nullable=False)
+    amount = db.Column(db.Numeric(12, 2, asdecimal=False), nullable=False)
     currency = db.Column(db.String(10), default='INR')
     
     from_pocket_id = db.Column(db.Integer, db.ForeignKey('pockets.id'), nullable=True, index=True)
     to_pocket_id = db.Column(db.Integer, db.ForeignKey('pockets.id'), nullable=True, index=True)
+    
+    source_type = db.Column(db.String(50), nullable=True)        # 'main_balance', 'pocket', 'bank', 'peer_user', 'external'
+    destination_type = db.Column(db.String(50), nullable=True)   # 'main_balance', 'pocket', 'bank', 'peer_user', 'external'
+    source_id = db.Column(db.String(100), nullable=True)
+    destination_id = db.Column(db.String(100), nullable=True)
+    reference_id = db.Column(db.String(100), nullable=True, index=True)
+    failure_reason = db.Column(db.Text, nullable=True)
     
     category = db.Column(db.String(100), nullable=True)
     merchant = db.Column(db.String(255), nullable=True)
@@ -116,10 +123,16 @@ class Transaction(db.Model):
             'user_id': self.user_id,
             'type': self.type,
             'status': self.status,
-            'amount': self.amount,
+            'amount': round(float(self.amount or 0.0), 2),
             'currency': self.currency,
             'from_pocket_id': self.from_pocket_id,
             'to_pocket_id': self.to_pocket_id,
+            'source_type': self.source_type,
+            'destination_type': self.destination_type,
+            'source_id': self.source_id,
+            'destination_id': self.destination_id,
+            'reference_id': self.reference_id,
+            'failure_reason': self.failure_reason,
             'category': self.category,
             'merchant': self.merchant,
             'description': self.description,

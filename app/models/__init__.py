@@ -9,6 +9,7 @@ from .admin_audit_log import AdminAuditLog
 from .money_request import MoneyRequest
 from .goal import SavingsGoal
 from .support_ticket import SupportTicket
+from .idempotency import IdempotencyRecord
 
 __all__ = [
     'User',
@@ -22,6 +23,7 @@ __all__ = [
     'MoneyRequest',
     'SavingsGoal',
     'SupportTicket',
+    'IdempotencyRecord',
     'EXPENSE_CATEGORIES',
     'INCOME_CATEGORIES'
 ]

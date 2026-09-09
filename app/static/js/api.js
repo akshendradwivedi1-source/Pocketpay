@@ -104,6 +104,9 @@ PP.Auth = {
   async setupPin(pin, confirm_pin) {
     return PP.API.post('/auth/setup-pin', { pin, confirm_pin });
   },
+  async completeSecuritySetup(pin, confirm_pin) {
+    return PP.API.post('/auth/complete-security-setup', { pin, confirm_pin });
+  },
   async changePin(old_pin, new_pin) {
     return PP.API.post('/auth/change-pin', { old_pin, new_pin });
   },
@@ -786,6 +789,7 @@ PP.AnalyticsAPI = {
 PP.PayoutsAPI = {
   banksList() { return PP.API.get('/api/payouts/banks-list'); },
   beneficiaries() { return PP.API.get('/api/payouts/beneficiaries'); },
+  validateBeneficiary(payload) { return PP.API.post('/api/payouts/validate-beneficiary', payload); },
   parseQR(qr_string) { return PP.API.post('/api/payouts/parse-qr', { qr_string }); },
   payQR(payload) {
     const pin = payload.pin;

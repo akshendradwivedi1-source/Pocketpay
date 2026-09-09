@@ -1,6 +1,10 @@
+import os
+import json
+import logging
 import re
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
+from flask import current_app
 from sqlalchemy import func
 from app.extensions import db
 from app.models.user import User
@@ -10,14 +14,184 @@ from app.models.goal import SavingsGoal
 from app.models.budget import Budget
 from app.utils.email_service import SUPPORT_CONTACT_EMAILS, SUPPORT_HELPLINES
 
+try:
+    import openai
+except ImportError:
+    openai = None
+
+logger = logging.getLogger(__name__)
+
 
 class AssistantService:
     """
-    PocketPay Hard-Coded Conversational Assistant Engine.
-    100% local, rule-based, deterministic intent matching system.
-    Zero external AI / LLM APIs (No OpenAI, Gemini, Claude, Groq, OpenRouter).
-    Strictly enforces authorization guardrails: never directly executes financial transfers.
+    PocketPay Conversational Financial Assistant Engine.
+    Integrates real OpenAI API with rich real-time authenticated account context,
+    supported by strict security guardrails and an instant deterministic fallback engine.
+    Never exposes API keys or credentials to the client.
     """
+
+    @classmethod
+    def _build_user_context(cls, user: Optional[User]) -> str:
+        if not user:
+            return "User Status: Unauthenticated Guest / Visitor."
+
+        total_avail = getattr(user, 'total_available_balance', 0.0)
+        bank_bal = getattr(user, 'connected_bank_balance', 0.0)
+        own_bal = getattr(user, 'own_wallet_balance', 0.0)
+
+        # Linked banks
+        try:
+            raw_banks = user.linked_banks or []
+            banks_list = [f"{b.get('bank_name', 'Bank')} ({b.get('account_mask') or '••••'}) - ₹{float(b.get('balance', 0.0)):,.2f}" for b in raw_banks if b.get('status') != 'disconnected']
+            banks_str = "; ".join(banks_list) if banks_list else "None connected"
+        except Exception:
+            banks_str = "None connected"
+
+        # Pockets
+        try:
+            pockets = [p for p in (user.pockets.all() if hasattr(user.pockets, 'all') else user.pockets or []) if not getattr(p, 'archived', False)]
+            pockets_list = [f"{p.name} (Balance: ₹{p.current_balance:,.2f}, Target: ₹{p.target_amount:,.2f})" for p in pockets[:8]]
+            pockets_str = "; ".join(pockets_list) if pockets_list else "No active pockets"
+        except Exception:
+            pockets_str = "No active pockets"
+
+        # Recent transactions
+        try:
+            txs = user.transactions.order_by(Transaction.created_at.desc()).limit(5).all() if hasattr(user, 'transactions') else []
+            tx_list = [
+                f"[{t.created_at.strftime('%d %b %H:%M') if t.created_at else 'Recent'}] {t.type.upper() if t.type else 'TX'}: ₹{t.amount:,.2f} ({t.status or 'completed'}) - {t.description or ''}"
+                for t in txs
+            ]
+            tx_str = "; ".join(tx_list) if tx_list else "No recent transactions"
+        except Exception:
+            tx_str = "No recent transactions"
+
+        return (
+            f"AUTHENTICATED USER ACCOUNT CONTEXT:\n"
+            f"- Full Name: {user.full_name}\n"
+            f"- Email: {user.email}\n"
+            f"- PocketPay Virtual UPI ID: {getattr(user, 'upi_id', 'pocketpay@sandbox')}\n"
+            f"- Total Available Balance: ₹{total_avail:,.2f}\n"
+            f"- Synced Bank Balance: ₹{bank_bal:,.2f}\n"
+            f"- Independent PocketPay Funds: ₹{own_bal:,.2f}\n"
+            f"- Linked Partner Banks: {banks_str}\n"
+            f"- Active Budget Pockets: {pockets_str}\n"
+            f"- Recent Transactions: {tx_str}\n"
+            f"- Security Credentials Setup: {'Completed' if getattr(user, 'security_setup_completed', False) else 'Pending / Required'}\n"
+            f"- 4-Digit Transaction PIN: {'Configured' if user.transaction_pin_hash else 'Not set'}\n"
+            f"- 2FA / TOTP: {'Enabled' if getattr(user, 'totp_enabled', False) else 'Disabled'}\n"
+        )
+
+    @classmethod
+    def _call_openai_assistant(
+        cls,
+        user: Optional[User],
+        query_text: str,
+        route: str = 'dashboard',
+        chat_history: Optional[List[Dict[str, str]]] = None
+    ) -> Optional[Dict[str, Any]]:
+        api_key = None
+        try:
+            if current_app:
+                api_key = current_app.config.get('OPENAI_API_KEY')
+        except Exception:
+            pass
+        if not api_key:
+            api_key = os.environ.get('OPENAI_API_KEY')
+
+        if not api_key or not str(api_key).strip():
+            return None
+
+        if not openai:
+            logger.warning("OpenAI package not available in environment.")
+            return None
+
+        try:
+            user_context = cls._build_user_context(user)
+            model_name = 'gpt-4o-mini'
+            try:
+                if current_app:
+                    model_name = current_app.config.get('OPENAI_MODEL') or model_name
+            except Exception:
+                pass
+            model_name = os.environ.get('OPENAI_MODEL') or model_name
+
+            system_prompt = f"""You are the official AI Financial Assistant for PocketPay, an intelligent digital banking, budgeting, and transfer platform.
+You are assisting the user whose verified, real-time account data is provided below:
+
+{user_context}
+
+OFFICIAL POCKETPAY CAPABILITIES & KNOWLEDGE:
+1. Pockets: Smart budget envelopes (Groceries, Utilities, Rent, Savings, Fun). Users can create pockets, allocate money, move money between pockets, and set budget rules.
+2. Dual-Balance Architecture: Total Available Balance = Independent PocketPay Funds + Synced Partner Bank Balances. When a bank account is disconnected, its balance is deducted while keeping PocketPay funds intact. Reconnecting does not create duplicate credits.
+3. Transfers: Internal Pocket Transfers, Instant Wallet-to-Wallet transfers, UPI transfers, and Net Banking IMPS/NEFT transfers with UTR references.
+4. Security & Guardrails (STRICT):
+   - You CANNOT directly execute payments, transfers, or balance alterations via text alone.
+   - If a user asks to send or transfer money, guide them to the appropriate modal or screen and remind them that their 4-digit Transaction PIN is mandatory to authorize any transfer. NEVER claim that a transfer has already succeeded without them completing the authorization.
+   - NEVER disclose user passwords, transaction PINs, OTPs, or API keys under any circumstances.
+5. Official Support: Helplines: +91 85278 70864, 8010906123, +91 92679 32341. Emails: agarwal.anirudh2006@gmail.com, akshendra.dwivedi1@gmail.com, ankitlawaniya2005@gmail.com. Users can also open a support ticket in-app.
+6. Machine-Readable QR: PocketPay provides standard UPI QR codes (`upi://pay?pa=...`) for instant camera/Google Lens scanning.
+
+RESPONSE REQUIREMENTS:
+You MUST respond strictly with a valid JSON object matching this schema:
+{{
+  "title": "Short title with emoji (e.g. '💳 Your Balance Overview' or '⚡ Send Money Assistance')",
+  "message": "Friendly, accurate answer in clean HTML using <b>, <i>, <br>, <ul>, <li> tags. Reference real balances or pocket names from user context accurately without hallucinating.",
+  "actions": [
+    {{
+      "label": "Button Label",
+      "icon": "lucide icon (e.g. arrow-up-right, refresh-ccw, receipt, folder-plus, landmark, shield-check, wallet, headphones)",
+      "action": "one of: send_money | transfer | view_history | create_pocket | link_bank | setup_pin | balance | pockets | settings | support_modal"
+    }}
+  ],
+  "suggested_prompts": [
+    "Suggested follow-up 1",
+    "Suggested follow-up 2",
+    "Suggested follow-up 3"
+  ]
+}}
+"""
+
+            messages = [{"role": "system", "content": system_prompt}]
+            if chat_history:
+                for h in chat_history[-4:]:
+                    role = 'assistant' if h.get('role') in ('assistant', 'bot') else 'user'
+                    text = h.get('content') or h.get('message') or ''
+                    if text:
+                        messages.append({"role": role, "content": text})
+            messages.append({"role": "user", "content": query_text})
+
+            client = openai.OpenAI(api_key=str(api_key).strip(), timeout=12.0)
+            completion = client.chat.completions.create(
+                model=model_name,
+                messages=messages,
+                response_format={"type": "json_object"},
+                max_tokens=650,
+                temperature=0.3
+            )
+
+            raw = completion.choices[0].message.content
+            parsed = json.loads(raw)
+
+            # Ensure valid structure
+            title = str(parsed.get('title') or 'PocketPay AI Assistant').strip()
+            message = str(parsed.get('message') or '').strip()
+            actions = parsed.get('actions') or []
+            suggested_prompts = parsed.get('suggested_prompts') or []
+
+            if not message:
+                return None
+
+            return {
+                'type': 'ai_response',
+                'title': title,
+                'message': message,
+                'actions': actions,
+                'suggested_prompts': suggested_prompts
+            }
+        except Exception as e:
+            logger.warning(f"OpenAI assistant invocation failed: {e}. Falling back to deterministic engine.")
+            return None
 
     @classmethod
     def process_query(
@@ -38,6 +212,11 @@ class AssistantService:
         guardrail_res = cls._check_guardrails(resolved_q, user)
         if guardrail_res:
             return guardrail_res
+
+        # 2. Real OpenAI AI Assistant Integration (if API key configured)
+        openai_res = cls._call_openai_assistant(user, query_text, route=route, chat_history=chat_history)
+        if openai_res:
+            return openai_res
 
         # 2. Support, Helplines & Complaints (Prioritized)
         if any(w in resolved_q for w in [

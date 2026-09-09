@@ -14,14 +14,14 @@ class Pocket(db.Model):
     icon = db.Column(db.String(50), default='wallet')
     icon_type = db.Column(db.String(20), default='lucide')
     
-    budget_amount = db.Column(db.Float, default=0.0)
-    monthly_limit = db.Column(db.Float, default=0.0)
+    budget_amount = db.Column(db.Numeric(12, 2, asdecimal=False), default=0.0)
+    monthly_limit = db.Column(db.Numeric(12, 2, asdecimal=False), default=0.0)
     priority = db.Column(db.Integer, default=0)
     sort_order = db.Column(db.Integer, default=0)
     
-    current_balance = db.Column(db.Float, default=0.0)
-    total_received = db.Column(db.Float, default=0.0)
-    total_spent = db.Column(db.Float, default=0.0)
+    current_balance = db.Column(db.Numeric(12, 2, asdecimal=False), default=0.0)
+    total_received = db.Column(db.Numeric(12, 2, asdecimal=False), default=0.0)
+    total_spent = db.Column(db.Numeric(12, 2, asdecimal=False), default=0.0)
     
     archived = db.Column(db.Boolean, default=False)
     archived_at = db.Column(db.DateTime, nullable=True)
@@ -40,21 +40,23 @@ class Pocket(db.Model):
     
     __table_args__ = (db.Index('ix_user_pocket_sort', 'user_id', 'sort_order'),)
     
-    def add_money(self, amount):
+    def add_money(self, amount, commit=False):
         if amount <= 0:
             raise ValueError('Amount must be positive')
-        self.current_balance = round(self.current_balance + amount, 2)
-        self.total_received = round(self.total_received + amount, 2)
-        db.session.commit()
+        self.current_balance = round(float(self.current_balance or 0.0) + float(amount), 2)
+        self.total_received = round(float(self.total_received or 0.0) + float(amount), 2)
+        if commit:
+            db.session.commit()
     
-    def deduct_money(self, amount):
+    def deduct_money(self, amount, commit=False):
         if amount <= 0:
             raise ValueError('Amount must be positive')
-        if self.current_balance < amount:
+        if float(self.current_balance or 0.0) < float(amount):
             raise ValueError('Insufficient balance')
-        self.current_balance = round(self.current_balance - amount, 2)
-        self.total_spent = round(self.total_spent + amount, 2)
-        db.session.commit()
+        self.current_balance = round(float(self.current_balance or 0.0) - float(amount), 2)
+        self.total_spent = round(float(self.total_spent or 0.0) + float(amount), 2)
+        if commit:
+            db.session.commit()
     
     def can_afford(self, amount):
         return self.current_balance >= amount
@@ -107,13 +109,13 @@ class Pocket(db.Model):
             'color': self.color,
             'icon': self.icon,
             'icon_type': self.icon_type,
-            'budget_amount': self.budget_amount,
-            'monthly_limit': self.monthly_limit,
+            'budget_amount': round(float(self.budget_amount or 0.0), 2),
+            'monthly_limit': round(float(self.monthly_limit or 0.0), 2),
             'priority': self.priority,
             'sort_order': self.sort_order,
-            'current_balance': self.current_balance,
-            'total_received': self.total_received,
-            'total_spent': self.total_spent,
+            'current_balance': round(float(self.current_balance or 0.0), 2),
+            'total_received': round(float(self.total_received or 0.0), 2),
+            'total_spent': round(float(self.total_spent or 0.0), 2),
             'archived': self.archived,
             'archived_at': self.archived_at.isoformat() if self.archived_at else None,
             'spending_rules': self.spending_rules or {},

@@ -1,9 +1,15 @@
 from flask import Blueprint, request
 from flask_login import current_user
+from datetime import datetime, timedelta
+import re
 from app.extensions import db
 from app.models.pocket import Pocket
 from app.models.transaction import Transaction
 from app.models.notification import Notification
+from app.models.user import User
+from app.models.money_request import MoneyRequest
+from app.services.ledger_service import LedgerService, FinancialInvariantError
+from app.utils.idempotency import get_idempotency_key, check_idempotency, save_idempotency
 from app.utils.helpers import (
     json_response, error_response, validate_required_fields,
     api_login_required, get_paginated_query, paginated_response
@@ -128,26 +134,40 @@ def create_pocket():
     if existing:
         return error_response(f'A pocket with this name already exists', 409)
     
-    initial_bal = float(data.get('initial_balance', 0) or 0)
+    funding_source = str(data.get('funding_source') or 'main_balance').strip().lower()
+    initial_bal = round(float(data.get('initial_balance', 0) or 0), 2)
     if initial_bal < 0:
         return error_response('Initial balance cannot be negative', 400)
         
-    if initial_bal > 0:
-        if (current_user.wallet_balance or 0.0) < initial_bal:
+    if funding_source == 'fund_later':
+        initial_bal = 0.0
+
+    # Idempotency check
+    idemp_key = get_idempotency_key(request, data)
+    idemp_rec = None
+    if idemp_key:
+        idemp_rec, cached_resp = check_idempotency(idemp_key, '/api/pockets', current_user.id, data)
+        if cached_resp:
+            resp_body, resp_code = cached_resp
+            return json_response(resp_body.get('data'), resp_body.get('message'), resp_code)
+
+    if funding_source == 'main_balance' and initial_bal > 0:
+        avail = round(float(current_user.wallet_balance or 0.0), 2)
+        if avail < initial_bal:
             return error_response(
-                f'Insufficient available balance (₹{current_user.wallet_balance:,.2f}) to allocate ₹{initial_bal:,.2f} to {name}. '
+                f'Insufficient available balance (₹{avail:,.2f}) to allocate ₹{initial_bal:,.2f} to {name}. '
                 'Please sync or top up your available balance first.',
                 400,
                 code='INSUFFICIENT_AVAILABLE_BALANCE'
             )
-        current_user.wallet_balance = round(current_user.wallet_balance - initial_bal, 2)
-    
+
     max_order = db.session.query(db.func.max(Pocket.sort_order))\
         .filter_by(user_id=current_user.id).scalar() or -1
     
     raw_desc = data.get('description')
     clean_desc = str(raw_desc).strip() if raw_desc is not None and str(raw_desc).strip() else None
     
+    # 1. Create base pocket with 0 balance
     pocket = Pocket(
         user_id=current_user.id,
         name=name,
@@ -155,46 +175,113 @@ def create_pocket():
         color=str(data.get('color') or '#6366f1').strip(),
         icon=str(data.get('icon') or 'wallet').strip(),
         icon_type=str(data.get('icon_type') or 'lucide').strip(),
-        budget_amount=float(data.get('budget_amount', 0) or 0),
-        monthly_limit=float(data.get('monthly_limit', 0) or 0),
+        budget_amount=round(float(data.get('budget_amount', 0) or 0), 2),
+        monthly_limit=round(float(data.get('monthly_limit', 0) or 0), 2),
         priority=int(data.get('priority', 0) or 0),
         sort_order=max_order + 1,
         spending_rules=data.get('spending_rules', {}) or {},
-        current_balance=initial_bal,
-        total_received=initial_bal,
+        current_balance=0.0,
+        total_received=0.0,
     )
-    
     db.session.add(pocket)
     db.session.commit()
-    
-    if pocket.current_balance > 0:
+
+    money_request_data = None
+    # 2. Handle chosen funding source
+    if funding_source == 'main_balance' and initial_bal > 0:
+        LedgerService.allocate_to_pocket(
+            user=current_user,
+            pocket=pocket,
+            amount=initial_bal,
+            description=f'Initial allocation to {pocket.name}',
+            idempotency_key=idemp_key
+        )
+    elif funding_source == 'peer_user' and initial_bal > 0:
+        # Phase 5: Search user and dispatch money request tied to this pocket
+        peer_identifier = str(data.get('peer_target') or data.get('peer_identifier') or '').strip()
+        if not peer_identifier:
+            return error_response('Peer user identifier (username, email, phone, or UPI ID) is required', 400)
+            
+        clean_q = peer_identifier.lower()
+        clean_phone = re.sub(r'[\s\-]', '', peer_identifier)
+        peer_user = User.query.filter(
+            (User.email == clean_q) |
+            (User.virtual_upi_id == clean_q) |
+            (User.virtual_wallet_id == peer_identifier.upper()) |
+            (User.phone == peer_identifier) |
+            (User.phone == clean_phone)
+        ).first()
+        if not peer_user:
+            return error_response('Target PocketPay user not found to request funds from', 404)
+        if peer_user.id == current_user.id:
+            return error_response('Cannot request money from your own account', 400)
+            
+        peer_msg = str(data.get('peer_note') or data.get('peer_message') or f"{current_user.full_name} requested ₹{initial_bal:,.2f} to fund pocket '{pocket.name}'").strip()
+        
+        req = MoneyRequest(
+            requester_id=current_user.id,
+            target_user_id=peer_user.id,
+            target_pocket_id=pocket.id,
+            amount=initial_bal,
+            note=peer_msg,
+            status='pending',
+            expires_at=datetime.utcnow() + timedelta(days=7)
+        )
+        db.session.add(req)
+        db.session.commit()
+        
+        Notification.create(
+            peer_user.id,
+            f"{current_user.full_name} requested ₹{initial_bal:,.2f}",
+            peer_msg,
+            'info',
+            'high'
+        )
+        money_request_data = req.to_dict()
+    elif funding_source == 'external_bank' and initial_bal > 0:
+        # Sandbox external bank deposit
+        pocket.add_money(initial_bal, commit=True)
         tx = Transaction(
             transaction_id=Transaction.generate_transaction_id(),
             user_id=current_user.id,
             type='topup',
-            amount=pocket.current_balance,
+            amount=initial_bal,
             to_pocket_id=pocket.id,
-            category='Pocket Allocation',
-            description=f'Allocated ₹{pocket.current_balance:,.2f} to {pocket.name}',
-            payment_method='transfer'
+            source_type='bank',
+            destination_type='pocket',
+            source_id='SANDBOX_BANK',
+            destination_id=str(pocket.id),
+            category='Bank Deposit',
+            description=f'External bank deposit into {pocket.name} (Sandbox Mode)',
+            payment_method='bank_transfer',
+            status='completed',
+            completed_at=datetime.utcnow()
         )
         db.session.add(tx)
-        tx.complete()
+        db.session.commit()
         Notification.transaction_alert(current_user.id, tx)
-    
+
     Notification.create(
         current_user.id,
         'Pocket Created',
-        f'Your "{pocket.name}" pocket has been created successfully with allocation of ₹{pocket.current_balance:,.2f}.',
+        f'Your "{pocket.name}" pocket has been created successfully.',
         'success',
         'normal',
         pocket_id=pocket.id
     )
     
-    return json_response({
+    resp_data = {
         'pocket': pocket.to_dict(True),
-        'wallet_balance': current_user.wallet_balance
-    }, 'Pocket created successfully', 201)
+        'wallet_balance': current_user.wallet_balance,
+        'total_funds': current_user.to_dict()['total_funds'],
+        'funding_source': funding_source,
+        'money_request': money_request_data
+    }
+    
+    if idemp_rec:
+        save_idempotency(idemp_rec, {'data': resp_data, 'message': 'Pocket created successfully'}, 201)
+
+    return json_response(resp_data, 'Pocket created successfully', 201)
 
 
 @bp.route('/<int:pocket_id>', methods=['PUT'])
@@ -398,42 +485,51 @@ def add_money_to_pocket(pocket_id):
     if not valid:
         return error_response(msg, 400)
         
-    amount = float(data.get('amount', 0))
+    try:
+        amount = round(float(data.get('amount', 0)), 2)
+    except (ValueError, TypeError):
+        return error_response('Invalid amount', 400)
+
     if amount <= 0:
         return error_response('Amount must be positive', 400)
-        
-    if (current_user.wallet_balance or 0.0) < amount:
-        return error_response(
-            f'Insufficient available balance. You have ₹{current_user.wallet_balance:,.2f} available in unallocated balance.',
-            400,
-            code='INSUFFICIENT_AVAILABLE_BALANCE',
-            available_balance=current_user.wallet_balance,
-            required_amount=amount
+
+    # PIN check if provided or configured
+    if current_user.transaction_pin_hash and data.get('pin'):
+        pin_ok, pin_err = current_user.verify_transaction_pin(str(data.get('pin', '')).strip())
+        if not pin_ok:
+            return error_response(pin_err or 'Incorrect PIN', 401, code='INCORRECT_PIN')
+
+    # Idempotency check
+    idemp_key = get_idempotency_key(request, data)
+    idemp_rec = None
+    if idemp_key:
+        idemp_rec, cached_resp = check_idempotency(idemp_key, f'/api/pockets/{pocket_id}/add-money', current_user.id, data)
+        if cached_resp:
+            resp_body, resp_code = cached_resp
+            return json_response(resp_body.get('data'), resp_body.get('message'), resp_code)
+
+    desc = data.get('description') or f'Allocated ₹{amount:,.2f} from available balance to {pocket.name}'
+    try:
+        res = LedgerService.allocate_to_pocket(
+            user=current_user,
+            pocket=pocket,
+            amount=amount,
+            description=desc,
+            idempotency_key=idemp_key
         )
-        
-    current_user.wallet_balance = round(current_user.wallet_balance - amount, 2)
-    pocket.add_money(amount)
-    
-    tx = Transaction(
-        transaction_id=Transaction.generate_transaction_id(),
-        user_id=current_user.id,
-        type='topup',
-        amount=amount,
-        to_pocket_id=pocket.id,
-        category='Pocket Allocation',
-        description=data.get('description') or f'Allocated ₹{amount:,.2f} from available balance to {pocket.name}',
-        payment_method='internal'
-    )
-    db.session.add(tx)
-    tx.complete()
-    
-    Notification.transaction_alert(current_user.id, tx)
-    
-    return json_response({
-        'pocket': pocket.to_dict(True),
-        'wallet_balance': current_user.wallet_balance,
-        'transaction': tx.to_dict(True)
-    }, f'₹{amount:,.2f} allocated to {pocket.name} successfully')
+        resp_data = {
+            'pocket': res['pocket'].to_dict(True),
+            'wallet_balance': res['wallet_balance'],
+            'total_funds': res['total_funds'],
+            'transaction': res['transaction'].to_dict(True)
+        }
+        if idemp_rec:
+            save_idempotency(idemp_rec, {'data': resp_data, 'message': f'₹{amount:,.2f} allocated to {pocket.name} successfully'}, 200)
+        return json_response(resp_data, f'₹{amount:,.2f} allocated to {pocket.name} successfully')
+    except FinancialInvariantError as fe:
+        return error_response(str(fe), 400, code='INSUFFICIENT_AVAILABLE_BALANCE')
+    except Exception as e:
+        return error_response(f'Allocation failed: {str(e)}', 500)
 
 
 @bp.route('/<int:pocket_id>/withdraw', methods=['POST'])
@@ -448,42 +544,51 @@ def withdraw_from_pocket(pocket_id):
     if not valid:
         return error_response(msg, 400)
         
-    amount = float(data.get('amount', 0))
+    try:
+        amount = round(float(data.get('amount', 0)), 2)
+    except (ValueError, TypeError):
+        return error_response('Invalid amount', 400)
+
     if amount <= 0:
         return error_response('Amount must be positive', 400)
-        
-    if pocket.current_balance < amount:
-        return error_response(
-            f'Insufficient pocket balance. {pocket.name} has ₹{pocket.current_balance:,.2f}.',
-            400,
-            code='INSUFFICIENT_POCKET_BALANCE',
-            pocket_balance=pocket.current_balance,
-            required_amount=amount
+
+    # PIN check
+    if current_user.transaction_pin_hash and data.get('pin'):
+        pin_ok, pin_err = current_user.verify_transaction_pin(str(data.get('pin', '')).strip())
+        if not pin_ok:
+            return error_response(pin_err or 'Incorrect PIN', 401, code='INCORRECT_PIN')
+
+    # Idempotency check
+    idemp_key = get_idempotency_key(request, data)
+    idemp_rec = None
+    if idemp_key:
+        idemp_rec, cached_resp = check_idempotency(idemp_key, f'/api/pockets/{pocket_id}/withdraw', current_user.id, data)
+        if cached_resp:
+            resp_body, resp_code = cached_resp
+            return json_response(resp_body.get('data'), resp_body.get('message'), resp_code)
+
+    desc = data.get('description') or f'Withdrew ₹{amount:,.2f} from {pocket.name} to available balance'
+    try:
+        res = LedgerService.withdraw_from_pocket(
+            user=current_user,
+            pocket=pocket,
+            amount=amount,
+            description=desc,
+            idempotency_key=idemp_key
         )
-        
-    pocket.deduct_money(amount)
-    current_user.wallet_balance = round((current_user.wallet_balance or 0.0) + amount, 2)
-    
-    tx = Transaction(
-        transaction_id=Transaction.generate_transaction_id(),
-        user_id=current_user.id,
-        type='transfer',
-        amount=amount,
-        from_pocket_id=pocket.id,
-        category='Pocket Withdrawal',
-        description=data.get('description') or f'Withdrew ₹{amount:,.2f} from {pocket.name} to available balance',
-        payment_method='internal'
-    )
-    db.session.add(tx)
-    tx.complete()
-    
-    Notification.transaction_alert(current_user.id, tx)
-    
-    return json_response({
-        'pocket': pocket.to_dict(True),
-        'wallet_balance': current_user.wallet_balance,
-        'transaction': tx.to_dict(True)
-    }, f'₹{amount:,.2f} moved to available balance successfully')
+        resp_data = {
+            'pocket': res['pocket'].to_dict(True),
+            'wallet_balance': res['wallet_balance'],
+            'total_funds': res['total_funds'],
+            'transaction': res['transaction'].to_dict(True)
+        }
+        if idemp_rec:
+            save_idempotency(idemp_rec, {'data': resp_data, 'message': f'₹{amount:,.2f} moved to available balance successfully'}, 200)
+        return json_response(resp_data, f'₹{amount:,.2f} moved to available balance successfully')
+    except FinancialInvariantError as fe:
+        return error_response(str(fe), 400, code='INSUFFICIENT_POCKET_BALANCE')
+    except Exception as e:
+        return error_response(f'Withdrawal failed: {str(e)}', 500)
 
 
 @bp.route('/<int:pocket_id>', methods=['DELETE'])
@@ -588,7 +693,12 @@ def transfer_between_pockets():
     
     from_id = data.get('from_pocket_id')
     to_id = data.get('to_pocket_id')
-    amount = float(data.get('amount', 0))
+    
+    try:
+        amount = round(float(data.get('amount', 0)), 2)
+    except (ValueError, TypeError):
+        return error_response('Invalid amount', 400)
+        
     description = data.get('description', '').strip() or None
     
     if amount <= 0:
@@ -597,6 +707,21 @@ def transfer_between_pockets():
     if from_id == to_id:
         return error_response('Cannot transfer to the same pocket', 400)
     
+    # PIN check if configured
+    if current_user.transaction_pin_hash and data.get('pin'):
+        pin_ok, pin_err = current_user.verify_transaction_pin(str(data.get('pin', '')).strip())
+        if not pin_ok:
+            return error_response(pin_err or 'Incorrect PIN', 401, code='INCORRECT_PIN')
+
+    # Idempotency check
+    idemp_key = get_idempotency_key(request, data)
+    idemp_rec = None
+    if idemp_key:
+        idemp_rec, cached_resp = check_idempotency(idemp_key, '/api/pockets/transfer', current_user.id, data)
+        if cached_resp:
+            resp_body, resp_code = cached_resp
+            return json_response(resp_body.get('data'), resp_body.get('message'), resp_code)
+
     from_pocket = Pocket.query.filter_by(id=from_id, user_id=current_user.id, archived=False).first()
     to_pocket = Pocket.query.filter_by(id=to_id, user_id=current_user.id, archived=False).first()
     
@@ -604,43 +729,29 @@ def transfer_between_pockets():
         return error_response('Source pocket not found', 404)
     if not to_pocket:
         return error_response('Destination pocket not found', 404)
-    
-    if from_pocket.current_balance < amount:
-        return error_response(
-            f'Insufficient balance. {from_pocket.name} has only ₹{from_pocket.current_balance:.2f}',
-            400,
-            code='INSUFFICIENT_BALANCE',
-            available_balance=from_pocket.current_balance,
-            required_amount=amount
-        )
-    
+
     try:
-        from_pocket.deduct_money(amount)
-        to_pocket.add_money(amount)
-    except ValueError as e:
-        db.session.rollback()
-        return error_response(str(e), 400)
-    
-    tx = Transaction(
-        transaction_id=Transaction.generate_transaction_id(),
-        user_id=current_user.id,
-        type='transfer',
-        amount=amount,
-        from_pocket_id=from_id,
-        to_pocket_id=to_id,
-        description=description or f'Transfer from {from_pocket.name} to {to_pocket.name}',
-        payment_method='internal'
-    )
-    db.session.add(tx)
-    tx.complete()
-    
-    Notification.transaction_alert(current_user.id, tx)
-    
-    return json_response({
-        'transaction': tx.to_dict(True),
-        'from_pocket': from_pocket.to_dict(),
-        'to_pocket': to_pocket.to_dict()
-    }, 'Transfer completed successfully')
+        res = LedgerService.transfer_between_pockets(
+            user=current_user,
+            from_pocket=from_pocket,
+            to_pocket=to_pocket,
+            amount=amount,
+            description=description,
+            idempotency_key=idemp_key
+        )
+        resp_data = {
+            'transaction': res['transaction'].to_dict(True),
+            'from_pocket': res['from_pocket'].to_dict(),
+            'to_pocket': res['to_pocket'].to_dict(),
+            'total_funds': res['total_funds']
+        }
+        if idemp_rec:
+            save_idempotency(idemp_rec, {'data': resp_data, 'message': 'Transfer completed successfully'}, 200)
+        return json_response(resp_data, 'Transfer completed successfully')
+    except FinancialInvariantError as fe:
+        return error_response(str(fe), 400, code='INSUFFICIENT_BALANCE')
+    except Exception as e:
+        return error_response(f'Transfer failed: {str(e)}', 500)
 
 
 @bp.route('/<int:pocket_id>/transactions', methods=['GET'])

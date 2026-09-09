@@ -7,6 +7,8 @@ from app.models.pocket import Pocket
 from app.models.transaction import Transaction, EXPENSE_CATEGORIES
 from app.models.notification import Notification
 from app.models.budget import Budget
+from app.services.ledger_service import LedgerService, FinancialInvariantError
+from app.utils.idempotency import get_idempotency_key, check_idempotency, save_idempotency
 from app.utils.helpers import (
     json_response, error_response, validate_required_fields,
     api_login_required, get_paginated_query, paginated_response, generate_qr_code,
@@ -287,7 +289,11 @@ def execute_expense():
         return error_response(msg, 400)
     
     pocket_id = data.get('pocket_id')
-    amount = float(data.get('amount', 0))
+    try:
+        amount = round(float(data.get('amount', 0)), 2)
+    except (ValueError, TypeError):
+        return error_response('Invalid amount', 400)
+
     pin = str(data.get('pin', ''))
     category = data.get('category', 'Custom')
     description = data.get('description', '').strip() or None
@@ -322,23 +328,32 @@ def execute_expense():
         if not verified:
             return error_response(err or 'Invalid Authenticator 2FA code', 401, code=err_code or 'INCORRECT_TOTP')
     
+    # Idempotency
+    idemp_key = get_idempotency_key(request, data)
+    idemp_rec = None
+    if idemp_key:
+        idemp_rec, cached_resp = check_idempotency(idemp_key, '/api/transactions/expense/execute', current_user.id, data)
+        if cached_resp:
+            resp_body, resp_code = cached_resp
+            return json_response(resp_body.get('data'), resp_body.get('message'), resp_code)
+
     pocket = Pocket.query.filter_by(id=pocket_id, user_id=current_user.id, archived=False).first()
     if not pocket:
         return error_response('Selected pocket not found', 404)
     
-    if pocket.current_balance < amount:
+    if float(pocket.current_balance or 0) < amount:
         other_pockets = Pocket.query.filter_by(
             user_id=current_user.id, archived=False
         ).filter(Pocket.current_balance >= amount, Pocket.id != pocket_id)\
         .order_by(Pocket.current_balance.desc()).all()
         
         return error_response(
-            f'Your {pocket.name} Pocket has only ₹{pocket.current_balance:.2f} remaining.',
+            f'Your {pocket.name} Pocket has only ₹{float(pocket.current_balance or 0):.2f} remaining.',
             400,
             code='INSUFFICIENT_BALANCE',
-            pocket_balance=pocket.current_balance,
+            pocket_balance=float(pocket.current_balance or 0),
             required_amount=amount,
-            shortage=round(amount - pocket.current_balance, 2),
+            shortage=round(amount - float(pocket.current_balance or 0), 2),
             pocket={
                 'id': pocket.id,
                 'name': pocket.name,
@@ -354,8 +369,8 @@ def execute_expense():
         )
     
     try:
-        pocket.current_balance = round(pocket.current_balance - amount, 2)
-        pocket.total_spent = round(pocket.total_spent + amount, 2)
+        pocket.current_balance = round(float(pocket.current_balance or 0) - amount, 2)
+        pocket.total_spent = round(float(pocket.total_spent or 0) + amount, 2)
         db.session.flush()
         
         tx = Transaction(
@@ -397,12 +412,17 @@ def execute_expense():
         
         db.session.commit()
         
-        return json_response({
+        resp_data = {
             'transaction': tx.to_dict(True),
             'pocket_balance': pocket.current_balance,
             'receipt_qr': tx.qr_code_url,
             'budget_alerts_triggered': len(budgets)
-        }, f'Payment of ₹{amount:.2f} successful', 201)
+        }
+
+        if idemp_rec:
+            save_idempotency(idemp_rec, {'data': resp_data, 'message': f'Payment of ₹{amount:.2f} successful'}, 201)
+
+        return json_response(resp_data, f'Payment of ₹{amount:.2f} successful', 201)
         
     except Exception as e:
         db.session.rollback()
@@ -419,7 +439,11 @@ def process_transfer():
     
     from_id = data.get('from_pocket_id')
     to_id = data.get('to_pocket_id')
-    amount = float(data.get('amount', 0))
+    try:
+        amount = round(float(data.get('amount', 0)), 2)
+    except (ValueError, TypeError):
+        return error_response('Invalid amount', 400)
+
     pin = str(data.get('pin', ''))
     
     if amount <= 0:
@@ -432,15 +456,32 @@ def process_transfer():
     
     success, error = current_user.verify_transaction_pin(pin)
     if not success:
-        return error_response(error or 'Incorrect PIN', 401, code='INCORRECT_PIN')
+        return error_response(
+            error or 'Incorrect PIN',
+            401,
+            code='INCORRECT_PIN',
+            pin_attempts=current_user.pin_attempts,
+            pin_locked_until=current_user.pin_locked_until.isoformat() if current_user.pin_locked_until else None
+        )
         
     # 2FA TOTP verification
     if current_user.totp_enabled:
         totp_code = data.get('totp_code') or data.get('totp') or data.get('otp')
+        if not totp_code:
+            return error_response('Google Authenticator 2FA code is required', 400, code='TOTP_REQUIRED')
         verified, err, err_code = current_user.verify_totp(totp_code)
         if not verified:
             return error_response(err or 'Invalid Authenticator 2FA code', 401, code=err_code or 'INCORRECT_TOTP')
     
+    # Idempotency
+    idemp_key = get_idempotency_key(request, data)
+    idemp_rec = None
+    if idemp_key:
+        idemp_rec, cached_resp = check_idempotency(idemp_key, '/api/transactions/transfer', current_user.id, data)
+        if cached_resp:
+            resp_body, resp_code = cached_resp
+            return json_response(resp_body.get('data'), resp_body.get('message'), resp_code)
+
     from_pocket = Pocket.query.filter_by(id=from_id, user_id=current_user.id, archived=False).first()
     to_pocket = Pocket.query.filter_by(id=to_id, user_id=current_user.id, archived=False).first()
     
@@ -449,45 +490,36 @@ def process_transfer():
     if not to_pocket:
         return error_response('Destination pocket not found', 404)
     
-    if from_pocket.current_balance < amount:
-        return error_response(
-            f'Insufficient balance. {from_pocket.name} has ₹{from_pocket.current_balance:.2f}',
-            400, code='INSUFFICIENT_BALANCE'
-        )
-    
+    note = data.get('description', '').strip() or f'Transfer: {from_pocket.name} → {to_pocket.name}'
+
     try:
-        from_pocket.current_balance = round(from_pocket.current_balance - amount, 2)
-        from_pocket.total_spent = round(from_pocket.total_spent + amount, 2)
-        to_pocket.current_balance = round(to_pocket.current_balance + amount, 2)
-        to_pocket.total_received = round(to_pocket.total_received + amount, 2)
-        db.session.flush()
-        
-        tx = Transaction(
-            transaction_id=Transaction.generate_transaction_id(),
-            user_id=current_user.id,
-            type='transfer',
-            status='pending',
+        res = LedgerService.transfer_between_pockets(
+            user=current_user,
+            from_pocket=from_pocket,
+            to_pocket=to_pocket,
             amount=amount,
-            from_pocket_id=from_id,
-            to_pocket_id=to_id,
-            description=data.get('description', '').strip() or f'Transfer: {from_pocket.name} → {to_pocket.name}',
-            payment_method='internal'
+            note=note,
+            idempotency_key=idemp_key
         )
-        tx.qr_code_url = generate_qr_code(build_qr_tx_url(tx), 250)
-        db.session.add(tx)
-        tx.complete()
-        db.session.commit()
-        
-        Notification.transaction_alert(current_user.id, tx)
-        
-        return json_response({
+
+        tx = res['transaction']
+        receipt_qr = generate_qr_code(build_qr_tx_url(tx), 250) or tx.qr_code_url
+
+        resp_data = {
             'transaction': tx.to_dict(True),
-            'qr_code_url': tx.qr_code_url,
-            'receipt_qr': tx.qr_code_url,
+            'qr_code_url': receipt_qr,
+            'receipt_qr': receipt_qr,
             'from_pocket_balance': from_pocket.current_balance,
             'to_pocket_balance': to_pocket.current_balance
-        }, f'₹{amount:.2f} transferred successfully', 201)
+        }
+
+        if idemp_rec:
+            save_idempotency(idemp_rec, {'data': resp_data, 'message': f'₹{amount:.2f} transferred successfully'}, 201)
+
+        return json_response(resp_data, f'₹{amount:.2f} transferred successfully', 201)
         
+    except FinancialInvariantError as fe:
+        return error_response(str(fe), 400, code='INSUFFICIENT_BALANCE')
     except Exception as e:
         db.session.rollback()
         return error_response(f'Transfer failed: {str(e)}', 500)

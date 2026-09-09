@@ -146,16 +146,19 @@ def api_qr_user(user_ref):
     if not target_user:
         return jsonify({'success': False, 'error': 'PocketPay user not found or inactive'}), 404
         
+    user_payload = {
+        'id': target_user.id,
+        'name': target_user.full_name,
+        'full_name': target_user.full_name,
+        'virtual_upi_id': target_user.virtual_upi_id or f"{target_user.email.split('@')[0]}@pocketpay",
+        'virtual_wallet_id': target_user.virtual_wallet_id,
+        'is_active': target_user.is_active
+    }
     return jsonify({
         'success': True,
         'type': 'user',
-        'user': {
-            'id': target_user.id,
-            'full_name': target_user.full_name,
-            'virtual_upi_id': target_user.virtual_upi_id or f"{target_user.email.split('@')[0]}@pocketpay",
-            'virtual_wallet_id': target_user.virtual_wallet_id,
-            'is_active': target_user.is_active
-        }
+        'data': user_payload,
+        'user': user_payload
     })
 
 
@@ -208,13 +211,14 @@ def api_qr_transaction(tx_ref):
     })
 
 
+@bp.route('/resolve', methods=['POST'])
 @bp.route('/api/resolve', methods=['POST'])
 def api_qr_resolve():
     """Universal resolver for all scanned PocketPay QR strings and payloads."""
     import json
     from app.services.payout_service import parse_payment_qr
     data = request.get_json() or {}
-    raw_content = str(data.get('content') or data.get('qr_string') or '').strip()
+    raw_content = str(data.get('content') or data.get('qr_string') or data.get('code') or data.get('payload') or '').strip()
     
     if not raw_content:
         return jsonify({'success': False, 'error': 'Empty QR content'}), 400
@@ -248,7 +252,17 @@ def api_qr_resolve():
         elif p_type == 'pocketpay_tx':
             tx_id = parsed.get('transaction_id')
             return api_qr_transaction(tx_id)
-        else:
+        elif p_type in ('upi', 'upi_qr', 'upi_id'):
+            vpa = parsed.get('vpa') or ''
+            # If the VPA belongs to an active PocketPay user, resolve cleanly to the user
+            if vpa:
+                target_user = User.query.filter(
+                    (User.virtual_upi_id == vpa) |
+                    (User.virtual_wallet_id == vpa) |
+                    (User.email == vpa)
+                ).first()
+                if target_user:
+                    return api_qr_user(target_user.virtual_wallet_id or target_user.virtual_upi_id)
             return jsonify({
                 'success': True,
                 'type': 'upi',

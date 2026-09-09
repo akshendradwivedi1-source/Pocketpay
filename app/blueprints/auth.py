@@ -1,5 +1,6 @@
 import re
 import uuid
+import logging
 from datetime import datetime
 from flask import Blueprint, request, jsonify, render_template, current_app
 from flask_login import login_user, logout_user, login_required, current_user
@@ -10,6 +11,8 @@ from app.models.notification import Notification
 from app.models.transaction import Transaction
 from app.utils.helpers import json_response, error_response, validate_required_fields, api_login_required, generate_qr_code
 from app.utils.email_service import send_otp_email, send_admin_otp_request_notification
+
+logger = logging.getLogger(__name__)
 
 bp = Blueprint('auth', __name__)
 
@@ -63,16 +66,24 @@ def register():
         
         user.generate_virtual_ids()
         
-        # 1. Create secure single-use Admin Approval Request Token
-        approval_token = user.create_admin_approval_request()
-        
-        # 2. Dispatch Admin Notification with [SEND OTP TO USER] button
-        send_admin_otp_request_notification(user.email, user.full_name, approval_token, request_obj=request)
+        # 1. Generate 6-digit verification code and dispatch directly to user's email
+        otp = user.generate_otp(for_email=True)
+        try:
+            send_otp_email(user.email, otp, user.full_name, 'verification')
+        except Exception as mail_err:
+            current_app.logger.warning(f"Registration OTP email sending error: {mail_err}")
+
+        # 2. Dispatch Admin Notification
+        try:
+            approval_token = user.create_admin_approval_request()
+            send_admin_otp_request_notification(user.email, user.full_name, approval_token, request_obj=request)
+        except Exception:
+            pass
         
         Notification.create(
             user.id,
             'Welcome to PocketPay!',
-            f'Thank you for joining PocketPay, {full_name.split()[0]}! Your verification request has been submitted for admin approval.',
+            f'Thank you for joining PocketPay, {full_name.split()[0]}! Your verification code has been sent to {user.email}.',
             'info',
             'high'
         )
@@ -81,9 +92,8 @@ def register():
             'user': user.to_dict(),
             'email': user.email,
             'requires_verification': True,
-            'requires_admin_approval': True,
-            'message': f'Account created! An OTP request has been sent for admin approval. Once approved, the 6-digit code will arrive at {user.email}.'
-        }, 'Account created successfully. Verification request sent for admin approval.', 201)
+            'message': f'Account created! A 6-digit verification code has been sent to {user.email}.'
+        }, 'Account created successfully. Please enter the verification code sent to your email.', 201)
         
     except ValueError as ve:
         db.session.rollback()
@@ -215,13 +225,17 @@ def resend_registration_otp():
         return error_response('Email is already verified. Please sign in.', 400)
     
     try:
-        approval_token = user.create_admin_approval_request()
-        send_admin_otp_request_notification(user.email, user.full_name, approval_token, request_obj=request)
+        otp = user.generate_otp(for_email=True)
+        send_otp_email(user.email, otp, user.full_name, 'verification')
+        try:
+            approval_token = user.create_admin_approval_request()
+            send_admin_otp_request_notification(user.email, user.full_name, approval_token, request_obj=request)
+        except Exception:
+            pass
         return json_response({
             'sent': True,
-            'email': user.email,
-            'requires_admin_approval': True
-        }, f'Verification request sent to admin for approval.')
+            'email': user.email
+        }, f'A fresh verification code has been sent to {user.email}.')
     except ValueError as ve:
         return error_response(str(ve), 429)
     except Exception as e:
@@ -244,13 +258,17 @@ def request_email_verification():
         return error_response('This email is already verified. You can sign in directly.', 400)
     
     try:
-        approval_token = user.create_admin_approval_request()
-        send_admin_otp_request_notification(user.email, user.full_name, approval_token, request_obj=request)
+        otp = user.generate_otp(for_email=True)
+        send_otp_email(user.email, otp, user.full_name, 'verification')
+        try:
+            approval_token = user.create_admin_approval_request()
+            send_admin_otp_request_notification(user.email, user.full_name, approval_token, request_obj=request)
+        except Exception:
+            pass
         return json_response({
             'email': user.email,
-            'sent': True,
-            'requires_admin_approval': True
-        }, f'Verification request sent to admin for approval.')
+            'sent': True
+        }, f'A verification code has been sent to {user.email}.')
     except ValueError as ve:
         return error_response(str(ve), 429)
     except Exception as e:
@@ -313,10 +331,15 @@ def login():
     except Exception:
         pass
     
+    is_sec_required = user.security_setup_required
     return json_response({
         'user': user.to_dict(),
         'needs_pin_setup': user.transaction_pin_hash is None,
-        'needs_email_verification': not user.email_verified
+        'needs_email_verification': not user.email_verified,
+        'security_setup_required': is_sec_required,
+        'security_setup_completed': not is_sec_required,
+        'needs_security_onboarding': is_sec_required,
+        'onboarding_completed': not is_sec_required
     }, 'Login successful')
 
 
@@ -326,6 +349,21 @@ def logout():
     if current_user.is_authenticated:
         logout_user()
     return json_response(message='Logged out successfully')
+
+
+@bp.route('/security-status', methods=['GET'])
+@api_login_required
+def security_status():
+    """Returns current user's security onboarding and 2FA status"""
+    return json_response({
+        'email_verified': current_user.email_verified,
+        'has_pin': bool(current_user.transaction_pin_hash),
+        'totp_enabled': bool(current_user.totp_enabled),
+        'needs_security_onboarding': current_user.needs_security_onboarding,
+        'onboarding_completed': not current_user.needs_security_onboarding,
+        'pin_attempts': current_user.pin_attempts,
+        'pin_locked_until': current_user.pin_locked_until.isoformat() if current_user.pin_locked_until else None
+    })
 
 
 @bp.route('/me', methods=['GET'])
@@ -417,15 +455,16 @@ def setup_pin():
     if not valid:
         return error_response(msg, 400)
     
-    pin = str(data.get('pin', ''))
+    pin = str(data.get('pin', '')).strip()
     if not pin.isdigit() or len(pin) != 4:
         return error_response('PIN must be exactly 4 digits', 400)
     
-    confirm_pin = str(data.get('confirm_pin', ''))
+    confirm_pin = str(data.get('confirm_pin', '')).strip()
     if confirm_pin and pin != confirm_pin:
         return error_response('PINs do not match', 400)
     
     current_user.set_transaction_pin(pin)
+    current_user.security_setup_completed = True
     db.session.commit()
     
     Notification.create(
@@ -436,7 +475,51 @@ def setup_pin():
         'normal'
     )
     
-    return json_response({'has_pin': True}, 'Transaction PIN set successfully')
+    return json_response({
+        'has_pin': True,
+        'security_setup_completed': True,
+        'user': current_user.to_dict()
+    }, 'Transaction PIN set successfully')
+
+
+@bp.route('/complete-security-setup', methods=['POST'])
+@api_login_required
+def complete_security_setup():
+    """
+    Dedicated endpoint for First-Login Security Credential Setup.
+    Validates, hashes, and stores transaction PIN, marks setup completed.
+    Never exposes raw PIN in response or logs.
+    """
+    data = request.get_json() or {}
+    valid, msg = validate_required_fields(data, ['pin'])
+    if not valid:
+        return error_response(msg, 400)
+        
+    pin = str(data.get('pin', '')).strip()
+    if not pin.isdigit() or len(pin) != 4:
+        return error_response('Security PIN must be exactly 4 numeric digits', 400)
+        
+    confirm_pin = str(data.get('confirm_pin', '')).strip()
+    if confirm_pin and pin != confirm_pin:
+        return error_response('PIN confirmation does not match. Please re-enter.', 400)
+        
+    current_user.set_transaction_pin(pin)
+    current_user.security_setup_completed = True
+    db.session.commit()
+    
+    Notification.create(
+        current_user.id,
+        'Security Credentials Configured 🔒',
+        'Your PocketPay transaction credentials have been created successfully. All transfers and banking features are now unlocked.',
+        'success',
+        'high'
+    )
+    
+    return json_response({
+        'security_setup_completed': True,
+        'has_transaction_pin': True,
+        'user': current_user.to_dict()
+    }, 'Security setup completed successfully')
 
 
 @bp.route('/change-pin', methods=['POST'])
@@ -488,6 +571,41 @@ def verify_pin():
                           code='INCORRECT_PIN',
                           pin_attempts=current_user.pin_attempts,
                           pin_locked_until=current_user.pin_locked_until.isoformat() if current_user.pin_locked_until else None)
+
+
+@bp.route('/reset-pin', methods=['POST'])
+@api_login_required
+def reset_pin():
+    """Securely resets transaction PIN using verified email OTP"""
+    data = request.get_json() or {}
+    valid, msg = validate_required_fields(data, ['otp', 'new_pin'])
+    if not valid:
+        return error_response(msg, 400)
+
+    otp = str(data.get('otp', '')).strip()
+    new_pin = str(data.get('new_pin', '')).strip()
+
+    if not new_pin.isdigit() or len(new_pin) != 4:
+        return error_response('New PIN must be exactly 4 digits', 400)
+
+    success, error = current_user.verify_otp(otp, for_email=True)
+    if not success:
+        return error_response(error or 'Invalid or expired OTP', 400)
+
+    current_user.set_transaction_pin(new_pin)
+    current_user.pin_attempts = 0
+    current_user.pin_locked_until = None
+    db.session.commit()
+
+    Notification.create(
+        current_user.id,
+        'Transaction PIN Reset',
+        'Your transaction PIN has been successfully reset.',
+        'success',
+        'high'
+    )
+
+    return json_response({'has_pin': True}, 'Transaction PIN reset successfully')
 
 
 @bp.route('/forgot-password', methods=['POST'])
@@ -542,6 +660,8 @@ def reset_password():
     user.email_otp = None
     user.otp_expires_at = None
     user.otp_resend_count = 0
+    # Invalidate previous sessions
+    user.security_version = (user.security_version or 1) + 1
     db.session.commit()
     
     try:
@@ -634,6 +754,8 @@ def get_wallet_qr():
     
     return json_response({
         'qr_code_url': qr_url,
+        'qr_code_base64': qr_url,
+        'qr_payload': scannable_url,
         'wallet_id': wallet_id,
         'upi_id': upi_id,
         'qr_data': scannable_url,
@@ -658,6 +780,13 @@ def link_bank_account():
     initial_balance = float(data.get('initial_balance', 25000.0) or 25000.0)
     
     clean_acc = re.sub(r'[\s\-]', '', acc_num)
+    existing_banks = list(current_user.linked_banks or [])
+    
+    # Prevent reconnecting the exact same bank account duplicate times without disconnecting first
+    for eb in existing_banks:
+        if str(eb.get('account_number', '')).strip() == clean_acc and eb.get('status') != 'disconnected':
+            return error_response('This bank account is already connected to your PocketPay profile', 400)
+    
     # Mask account number for safe public display
     masked = '•••• ' + (clean_acc[-4:] if len(clean_acc) >= 4 else clean_acc)
     now_iso = datetime.utcnow().isoformat()
@@ -671,33 +800,35 @@ def link_bank_account():
         'account_number': clean_acc,
         'ifsc_code': ifsc or 'SBIN0001234',
         'balance': initial_balance,
+        'imported_balance': initial_balance,
         'status': 'verified',
         'is_sandbox': True,
         'linked_at': now_iso,
         'last_synced_at': now_iso
     }
     
-    existing_banks = list(current_user.linked_banks or [])
     existing_banks.append(bank_entry)
     current_user.linked_banks = existing_banks
     
     # Initialize / sync wallet balance with the permitted sandbox bank balance
     current_user.wallet_balance = round((current_user.wallet_balance or 0.0) + initial_balance, 2)
-    db.session.commit()
     
-    # Record initial bank synchronization transaction
+    # Record initial bank synchronization transaction in ledger
     tx = Transaction(
         transaction_id=Transaction.generate_transaction_id(),
         user_id=current_user.id,
         type='topup',
         amount=initial_balance,
         category='Bank Sync',
+        merchant=bank_name,
         description=f'Initial balance sync from {bank_name} ({masked}) [Sandbox Demo]',
         payment_method='bank_transfer',
-        extra_data={'is_sandbox': True, 'bank_id': bank_entry['id']}
+        status='completed',
+        completed_at=datetime.utcnow(),
+        extra_data={'is_sandbox': True, 'bank_id': bank_entry['id'], 'action': 'link_bank'}
     )
     db.session.add(tx)
-    tx.complete()
+    db.session.commit()
     
     Notification.create(
         current_user.id,
@@ -711,6 +842,8 @@ def link_bank_account():
         'bank': bank_entry,
         'linked_banks': current_user.linked_banks,
         'wallet_balance': current_user.wallet_balance,
+        'own_wallet_balance': current_user.own_wallet_balance,
+        'connected_bank_balance': current_user.connected_bank_balance,
         'total_balance': current_user.wallet_balance + current_user.total_pocket_balance()
     }, 'Bank account linked successfully (Sandbox Mode)', 201)
 
@@ -719,7 +852,10 @@ def link_bank_account():
 @api_login_required
 def get_linked_banks():
     return json_response({
-        'linked_banks': current_user.linked_banks or []
+        'linked_banks': current_user.linked_banks or [],
+        'connected_bank_balance': current_user.connected_bank_balance,
+        'own_wallet_balance': current_user.own_wallet_balance,
+        'wallet_balance': current_user.wallet_balance
     })
 
 
@@ -757,6 +893,11 @@ def sync_bank_balance():
 @bp.route('/unlink-bank-account', methods=['POST'])
 @api_login_required
 def unlink_bank_account():
+    """
+    Safely disconnects connected bank account and reconciles imported balance.
+    Preserves user's independent PocketPay funds.
+    Prevents duplicate disconnect deductions.
+    """
     data = request.get_json() or {}
     bank_id = data.get('bank_id')
     
@@ -765,24 +906,59 @@ def unlink_bank_account():
         return error_response('No connected bank accounts to disconnect', 400)
         
     if bank_id:
+        target_bank = next((b for b in banks if b.get('id') == bank_id), None)
+        if not target_bank:
+            return error_response('Connected bank account not found or already disconnected', 404)
+        banks_to_remove = [target_bank]
         new_banks = [b for b in banks if b.get('id') != bank_id]
     else:
+        banks_to_remove = list(banks)
         new_banks = []
         
+    # Proper accounting: Deduct only the amount that originated from the connected bank(s)
+    # Example: Bank balance = ₹25,000, Total PocketPay balance = ₹25,500
+    # After disconnecting: ₹25,500 - ₹25,000 = ₹500
+    deduct_amount = round(sum(float(b.get('balance', b.get('imported_balance', 0.0)) or 0.0) for b in banks_to_remove), 2)
+    current_wallet = float(current_user.wallet_balance or 0.0)
+    
+    reconciled_wallet = max(0.0, round(current_wallet - deduct_amount, 2))
+    current_user.wallet_balance = reconciled_wallet
     current_user.linked_banks = new_banks
+    
+    # Financial ledger record for the bank disconnect reconciliation
+    if deduct_amount > 0:
+        bank_labels = ", ".join(b.get('bank_name', 'Bank') for b in banks_to_remove)
+        tx = Transaction(
+            transaction_id=Transaction.generate_transaction_id(),
+            user_id=current_user.id,
+            type='withdraw',
+            amount=deduct_amount,
+            category='Bank Disconnect',
+            merchant=bank_labels,
+            description=f'Balance adjustment: disconnected {bank_labels}',
+            payment_method='bank_transfer',
+            status='completed',
+            completed_at=datetime.utcnow(),
+            extra_data={'action': 'disconnect_bank', 'removed_bank_ids': [b.get('id') for b in banks_to_remove]}
+        )
+        db.session.add(tx)
+        
     db.session.commit()
     
     Notification.create(
         current_user.id,
         'Bank Account Disconnected',
-        'Your bank integration has been disconnected.',
+        f'Your bank integration has been safely disconnected. Reconciled imported balance of ₹{deduct_amount:,.2f}. Your independent PocketPay funds of ₹{reconciled_wallet:,.2f} are preserved.',
         'info',
         'medium'
     )
     
     return json_response({
-        'linked_banks': current_user.linked_banks
-    }, 'Bank account disconnected successfully')
+        'linked_banks': current_user.linked_banks,
+        'wallet_balance': current_user.wallet_balance,
+        'own_wallet_balance': current_user.own_wallet_balance,
+        'total_funds': current_user.wallet_balance + current_user.total_pocket_balance()
+    }, 'Bank account disconnected successfully and balance reconciled.')
 
 
 @bp.route('/upgrade-premium', methods=['POST'])

@@ -147,6 +147,8 @@ def create_app(config_name=None):
                 alter_statements = []
                 if 'is_admin' not in columns:
                     alter_statements.append(f"ALTER TABLE users ADD COLUMN is_admin {bool_false}")
+                if 'security_version' not in columns:
+                    alter_statements.append("ALTER TABLE users ADD COLUMN security_version INTEGER DEFAULT 1")
                 if 'telegram_linking_token' not in columns:
                     alter_statements.append("ALTER TABLE users ADD COLUMN telegram_linking_token VARCHAR(64)")
                 if 'telegram_linking_token_expires_at' not in columns:
@@ -157,6 +159,8 @@ def create_app(config_name=None):
                     alter_statements.append("ALTER TABLE users ADD COLUMN otp_approval_token VARCHAR(128)")
                 if 'otp_approval_status' not in columns:
                     alter_statements.append("ALTER TABLE users ADD COLUMN otp_approval_status VARCHAR(32) DEFAULT 'none'")
+                if 'security_setup_completed' not in columns:
+                    alter_statements.append(f"ALTER TABLE users ADD COLUMN security_setup_completed {bool_false}")
                 if 'deleted_at' not in columns:
                     alter_statements.append(f"ALTER TABLE users ADD COLUMN deleted_at {datetime_type}")
 
@@ -178,12 +182,48 @@ def create_app(config_name=None):
 
             if 'transactions' in tables:
                 tx_columns = [c['name'] for c in inspector.get_columns('transactions')]
+                tx_alter = []
+                if 'source_type' not in tx_columns:
+                    tx_alter.append("ALTER TABLE transactions ADD COLUMN source_type VARCHAR(32)")
+                if 'destination_type' not in tx_columns:
+                    tx_alter.append("ALTER TABLE transactions ADD COLUMN destination_type VARCHAR(32)")
+                if 'source_id' not in tx_columns:
+                    tx_alter.append("ALTER TABLE transactions ADD COLUMN source_id VARCHAR(64)")
+                if 'destination_id' not in tx_columns:
+                    tx_alter.append("ALTER TABLE transactions ADD COLUMN destination_id VARCHAR(64)")
+                if 'reference_id' not in tx_columns:
+                    tx_alter.append("ALTER TABLE transactions ADD COLUMN reference_id VARCHAR(128)")
+                if 'failure_reason' not in tx_columns:
+                    tx_alter.append("ALTER TABLE transactions ADD COLUMN failure_reason VARCHAR(255)")
                 if is_postgres and 'qr_code_url' in tx_columns:
+                    tx_alter.append("ALTER TABLE transactions ALTER COLUMN qr_code_url TYPE TEXT")
+
+                for stmt in tx_alter:
                     try:
                         with db.engine.begin() as conn:
-                            conn.execute(text("ALTER TABLE transactions ALTER COLUMN qr_code_url TYPE TEXT"))
+                            conn.execute(text(stmt))
                     except Exception:
                         pass
+
+            if 'money_requests' in tables:
+                mr_columns = [c['name'] for c in inspector.get_columns('money_requests')]
+                mr_alter = []
+                if 'expires_at' not in mr_columns:
+                    mr_alter.append(f"ALTER TABLE money_requests ADD COLUMN expires_at {datetime_type}")
+                if 'target_pocket_id' not in mr_columns:
+                    mr_alter.append("ALTER TABLE money_requests ADD COLUMN target_pocket_id INTEGER")
+                for stmt in mr_alter:
+                    try:
+                        with db.engine.begin() as conn:
+                            conn.execute(text(stmt))
+                    except Exception:
+                        pass
+
+            if 'idempotency_records' not in tables:
+                try:
+                    db.create_all()
+                except Exception:
+                    pass
         except Exception as e:
             app.logger.debug(f"[Schema Sync Exception] {e}")
 

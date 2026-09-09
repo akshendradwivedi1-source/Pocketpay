@@ -14,6 +14,11 @@ PP.Modals = {
     let descriptionVal = editing ? (existing.description || '') : '';
     let nameVal = editing ? existing.name : '';
 
+    let fundingSource = 'main_balance';
+    let peerIdentifier = '';
+    let bankCode = 'HDFC';
+    let noteVal = '';
+
     const modal = PP.UI.modal({
       title: editing ? 'Edit Pocket' : 'Create New Pocket',
       subtitle: editing ? 'Update your pocket details' : 'Organize your money with custom pockets',
@@ -72,16 +77,91 @@ PP.Modals = {
           return g;
         })(),
       ]));
+
       if (!editing) {
+        // Multi-source funding section
+        body.appendChild(PP.el('div', { class: 'form-group' }, [
+          PP.el('label', { class: 'form-label' }, ['Funding Source']),
+          (() => {
+            const sel = PP.el('select', { class: 'form-select' });
+            [
+              { v: 'main_balance', l: 'Available Balance (Self funded from main wallet)' },
+              { v: 'peer_user', l: 'Another PocketPay User (Peer request)' },
+              { v: 'external_bank', l: 'External Bank (Sandbox Net Banking)' },
+              { v: 'request_money', l: 'Request Money (Creates formal money request)' },
+              { v: 'fund_later', l: 'Fund Later (Zero balance pocket)' }
+            ].forEach(opt => {
+              const o = PP.el('option', { value: opt.v }, [opt.l]);
+              if (fundingSource === opt.v) o.selected = true;
+              sel.appendChild(o);
+            });
+            sel.onchange = () => { fundingSource = sel.value; renderBody(); };
+            return sel;
+          })(),
+          (() => {
+            const hints = {
+              main_balance: `Funds will be immediately moved from your Available Balance (₹${PP.fmt(PP.state.user?.wallet_balance || 0).replace('₹','')}) into this pocket. Total funds remain unchanged.`,
+              peer_user: 'Pocket is created immediately. Initial funding will be requested from another PocketPay user.',
+              external_bank: 'Deposit initial funds directly from an external partner bank in sandbox mode.',
+              request_money: 'Creates a pending money request linked to this pocket. Upon payment, funds credit directly here.',
+              fund_later: 'Creates an empty pocket with ₹0.00. You can allocate funds from available balance or transfers at any time.'
+            };
+            return PP.el('div', { class: 'form-hint', style: 'color:var(--text-muted);font-size:0.8rem;margin-top:0.35rem' }, [hints[fundingSource] || '']);
+          })()
+        ]));
+
+        if (fundingSource !== 'fund_later') {
+          const rowChildren = [
+            PP.el('div', { class: 'form-group' }, [
+              PP.el('label', { class: 'form-label' }, [fundingSource === 'request_money' ? 'Requested Amount (₹)' : 'Initial Balance (₹)']),
+              (() => {
+                const inp = PP.el('input', { class: 'form-input', type: 'number', min: '0', step: '0.01', placeholder: '0.00', value: initialBalance || '' });
+                inp.oninput = () => initialBalance = parseFloat(inp.value) || 0;
+                return inp;
+              })(),
+            ])
+          ];
+
+          if (fundingSource === 'peer_user' || fundingSource === 'request_money') {
+            rowChildren.push(
+              PP.el('div', { class: 'form-group' }, [
+                PP.el('label', { class: 'form-label' }, ['Peer User (Email / Phone / UPI ID) *']),
+                (() => {
+                  const inp = PP.el('input', { class: 'form-input', placeholder: 'e.g. user@pocketpay or 9876543210', value: peerIdentifier });
+                  inp.oninput = () => peerIdentifier = inp.value;
+                  return inp;
+                })(),
+              ])
+            );
+          } else if (fundingSource === 'external_bank') {
+            rowChildren.push(
+              PP.el('div', { class: 'form-group' }, [
+                PP.el('label', { class: 'form-label' }, ['Select Bank (Sandbox)']),
+                (() => {
+                  const sel = PP.el('select', { class: 'form-select' });
+                  [
+                    { c: 'HDFC', n: 'HDFC Bank' },
+                    { c: 'SBIN', n: 'State Bank of India' },
+                    { c: 'ICIC', n: 'ICICI Bank' },
+                    { c: 'UTIB', n: 'Axis Bank' },
+                    { c: 'KKBK', n: 'Kotak Mahindra Bank' },
+                    { c: 'PUNB', n: 'Punjab National Bank' },
+                  ].forEach(b => {
+                    const o = PP.el('option', { value: b.c }, [b.n]);
+                    if (bankCode === b.c) o.selected = true;
+                    sel.appendChild(o);
+                  });
+                  sel.onchange = () => bankCode = sel.value;
+                  return sel;
+                })(),
+              ])
+            );
+          }
+
+          body.appendChild(PP.el('div', { class: 'form-row' }, rowChildren));
+        }
+
         body.appendChild(PP.el('div', { class: 'form-row' }, [
-          PP.el('div', { class: 'form-group' }, [
-            PP.el('label', { class: 'form-label' }, ['Initial Balance']),
-            (() => {
-              const inp = PP.el('input', { class: 'form-input', type: 'number', min: '0', step: '0.01', placeholder: '0.00', value: initialBalance || '' });
-              inp.oninput = () => initialBalance = parseFloat(inp.value) || 0;
-              return inp;
-            })(),
-          ]),
           PP.el('div', { class: 'form-group' }, [
             PP.el('label', { class: 'form-label' }, ['Priority']),
             (() => {
@@ -97,6 +177,7 @@ PP.Modals = {
           ]),
         ]));
       }
+
       body.appendChild(PP.el('div', { class: 'form-row' }, [
         PP.el('div', { class: 'form-group' }, [
           PP.el('label', { class: 'form-label' }, ['Total Budget (optional)']),
@@ -124,9 +205,13 @@ PP.Modals = {
         class: 'btn btn-primary',
         onclick: async () => {
           if (!nameVal?.trim()) return PP.UI.toast('Name required', 'Please enter a pocket name', 'warning');
-          saveBtn.disabled = true; saveBtn.innerHTML = '<i data-lucide="loader-2" style="animation:slowSpin 1s linear infinite"></i> Saving…';
+          if (!editing && (fundingSource === 'peer_user' || fundingSource === 'request_money') && !peerIdentifier?.trim()) {
+            return PP.UI.toast('Peer Required', 'Please enter the peer user email, phone, or UPI ID', 'warning');
+          }
+          saveBtn.disabled = true; saveBtn.innerHTML = '<i data-lucide="loader-2" style="animation:slowSpin 1s linear infinite"></i> Processing…';
           PP.refreshIcons();
           try {
+            const idempKey = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : ('pp_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9));
             const payload = {
               name: nameVal.trim(),
               description: descriptionVal.trim() || null,
@@ -136,8 +221,15 @@ PP.Modals = {
               budget_amount: budgetAmount,
               monthly_limit: monthlyLimit,
               priority,
+              idempotency_key: idempKey
             };
-            if (!editing) payload.initial_balance = initialBalance;
+            if (!editing) {
+              payload.funding_source = fundingSource;
+              payload.initial_balance = (fundingSource === 'fund_later') ? 0 : initialBalance;
+              payload.peer_identifier = peerIdentifier.trim();
+              payload.bank_code = bankCode;
+              payload.note = noteVal;
+            }
             const res = editing ? await PP.PocketsAPI.update(existing.id, payload) : await PP.PocketsAPI.create(payload);
             PP.UI.toast(editing ? 'Pocket updated' : 'Pocket created', res.message || '', 'success');
             modal.close();
@@ -720,7 +812,21 @@ PP.Modals = {
               pin2 = entered.join('');
               if (pin1 !== pin2) { PP.UI.toast('PINs do not match', 'Please try again', 'error'); step = 1; pin1 = ''; entered = []; renderBody(); }
               else {
-                try { await PP.Auth.setupPin(pin1, pin2); PP.UI.toast('PIN set', 'Your transaction PIN has been configured', 'success'); modal.close(); PP.state.user = (await PP.Auth.me()).data.user; PP.refreshUserChrome(); }
+                try {
+                  if (PP.Auth.completeSecuritySetup) {
+                    await PP.Auth.completeSecuritySetup(pin1, pin2);
+                  } else {
+                    await PP.Auth.setupPin(pin1, pin2);
+                  }
+                  PP.UI.toast('Security Setup Complete', 'Your 4-digit transaction PIN has been successfully configured.', 'success');
+                  modal.close();
+                  const meRes = await PP.Auth.me();
+                  if (meRes?.data?.user) {
+                    PP.state.user = meRes.data.user;
+                  }
+                  PP.refreshUserChrome();
+                  PP.refreshCurrentView();
+                }
                 catch (e) { PP.UI.toast('PIN setup failed', e.message, 'error'); }
               }
             }
@@ -2286,7 +2392,7 @@ PP.Modals = {
       }
     };
 
-    // Photo upload listener
+    // Photo upload listener with universal jsQR decoder
     fileInput.onchange = async (e) => {
       const file = e.target.files?.[0];
       if (!file) return;
@@ -2299,6 +2405,25 @@ PP.Modals = {
         const ctx = canvasEl.getContext('2d');
         ctx.drawImage(img, 0, 0);
 
+        // 1. Try jsQR decode from image canvas
+        if (typeof jsQR === 'function') {
+          try {
+            const imgData = ctx.getImageData(0, 0, img.width, img.height);
+            const qrCode = jsQR(imgData.data, imgData.width, imgData.height, {
+              inversionAttempts: 'dontInvert'
+            }) || jsQR(imgData.data, imgData.width, imgData.height, {
+              inversionAttempts: 'onlyInvert'
+            });
+            if (qrCode && qrCode.data) {
+              await handleQrDetected(qrCode.data);
+              return;
+            }
+          } catch (e) {
+            console.warn('jsQR image decode error:', e);
+          }
+        }
+
+        // 2. Try native BarcodeDetector if available
         if ('BarcodeDetector' in window) {
           try {
             const detector = new BarcodeDetector({ formats: ['qr_code'] });
@@ -2338,16 +2463,42 @@ PP.Modals = {
           try { detector = new BarcodeDetector({ formats: ['qr_code'] }); } catch {}
         }
 
+        const scanCanvas = document.createElement('canvas');
+        const scanCtx = scanCanvas.getContext('2d', { willReadFrequently: true });
+
         const scanLoop = async () => {
           if (!videoStream || isProcessing) return;
-          if (videoEl.readyState >= videoEl.HAVE_CURRENT_DATA && detector) {
-            try {
-              const barcodes = await detector.detect(videoEl);
-              if (barcodes.length > 0 && barcodes[0].rawValue) {
-                await handleQrDetected(barcodes[0].rawValue);
-                return;
-              }
-            } catch {}
+          if (videoEl.readyState >= videoEl.HAVE_CURRENT_DATA) {
+            const vw = videoEl.videoWidth || 640;
+            const vh = videoEl.videoHeight || 480;
+
+            // 1. Scan with jsQR
+            if (typeof jsQR === 'function' && vw > 0 && vh > 0) {
+              try {
+                scanCanvas.width = vw;
+                scanCanvas.height = vh;
+                scanCtx.drawImage(videoEl, 0, 0, vw, vh);
+                const frameData = scanCtx.getImageData(0, 0, vw, vh);
+                const code = jsQR(frameData.data, frameData.width, frameData.height, {
+                  inversionAttempts: 'dontInvert'
+                });
+                if (code && code.data) {
+                  await handleQrDetected(code.data);
+                  return;
+                }
+              } catch (e) {}
+            }
+
+            // 2. Secondary fallback: native BarcodeDetector
+            if (detector) {
+              try {
+                const barcodes = await detector.detect(videoEl);
+                if (barcodes.length > 0 && barcodes[0].rawValue) {
+                  await handleQrDetected(barcodes[0].rawValue);
+                  return;
+                }
+              } catch {}
+            }
           }
           scanAnimFrame = requestAnimationFrame(scanLoop);
         };
@@ -2383,8 +2534,9 @@ PP.Modals = {
     const u = PP.state.user || {};
     const walletId = u.virtual_wallet_id || `PPW${u.id || '001'}`;
     const upiId = u.virtual_upi_id || `${(u.email || 'user').split('@')[0]}@pocketpay`;
-    const userUrl = `https://pocketpay-1.onrender.com/qr/user/${walletId}`;
-    const qrImgUrl = `/api/qr?content=${encodeURIComponent(userUrl)}&size=300`;
+    const fullName = u.full_name || 'PocketPay User';
+    const upiUri = `upi://pay?pa=${upiId}&pn=${encodeURIComponent(fullName)}&cu=INR`;
+    const qrImgUrl = `/api/qr?content=${encodeURIComponent(upiUri)}&size=300`;
 
     const modal = PP.UI.modal({
       title: 'My Profile QR',
@@ -5022,6 +5174,7 @@ PP.Modals = {
 
 // Backward compatibility aliases
 PP.Modals.setupPIN = PP.Modals.setupPin;
+PP.Modals.securitySetup = PP.Modals.setupPin;
 PP.Modals.changePIN = PP.Modals.changePin;
 PP.Modals.saveRule = PP.Modals.saveDistributionRule;
 

@@ -42,10 +42,12 @@ def validate_ifsc(ifsc: str) -> bool:
     return bool(re.match(r'^[A-Z]{4}0[A-Z0-9]{6}$', ifsc.strip().upper()))
 
 def validate_account_number(acc_num: str) -> bool:
-    """Validate bank account number length and format"""
+    """Validate bank account number length and format, or virtual wallet ID"""
     if not acc_num or not isinstance(acc_num, str):
         return False
-    clean = re.sub(r'[\s\-]', '', acc_num)
+    clean = re.sub(r'[\s\-]', '', str(acc_num)).strip()
+    if clean.upper().startswith('PPW') and len(clean) >= 6:
+        return True
     return bool(re.match(r'^\d{9,18}$', clean))
 
 def validate_upi_id(vpa: str) -> bool:
@@ -252,28 +254,54 @@ class PayoutProvider:
             "processed_at": datetime.utcnow().isoformat()
         }
         
-        # Identify if recipient bank account is registered to any PocketPay user (User B)
+        # Identify if recipient is a PocketPay user (User B) or has a linked bank account
         clean_target_acc = re.sub(r'[\s\-]', '', acc_num)
         recipient_user = None
         
+        # 1. Check if beneficiary dict explicitly has recipient user_id
+        target_uid = beneficiary.get('user_id') or beneficiary.get('recipient_user_id')
+        if target_uid and str(target_uid) != str(user.id):
+            try:
+                recipient_user = User.query.filter_by(id=int(target_uid)).first()
+            except Exception:
+                pass
+
         all_other_users = User.query.filter(User.id != user.id).all()
-        for u in all_other_users:
-            for b in (u.linked_banks or []):
-                b_acc = str(b.get('account_number') or '').strip()
-                b_clean = re.sub(r'[\s\-]', '', b_acc)
-                b_mask = str(b.get('account_mask') or '')
-                
-                # Match by clean account number or mask suffix
-                if (b_clean and b_clean == clean_target_acc) or (b_mask and b_mask.endswith(clean_target_acc[-4:])):
+        # 2. Check by linked bank accounts across other users
+        if not recipient_user:
+            for u in all_other_users:
+                for b in (u.linked_banks or []):
+                    b_acc = str(b.get('account_number') or '').strip()
+                    b_clean = re.sub(r'[\s\-]', '', b_acc)
+                    b_mask = str(b.get('account_mask') or '')
+                    if (b_clean and b_clean == clean_target_acc) or (b_mask and b_mask.endswith(clean_target_acc[-4:])):
+                        recipient_user = u
+                        break
+                if recipient_user:
+                    break
+
+        # 3. Check if clean_target_acc matches user virtual_wallet_id, phone, or id
+        if not recipient_user:
+            for u in all_other_users:
+                if (u.virtual_wallet_id and u.virtual_wallet_id.upper() == clean_target_acc.upper()) or \
+                   (u.phone and re.sub(r'[\s\-]', '', u.phone) == clean_target_acc) or \
+                   (str(u.id) == clean_target_acc):
                     recipient_user = u
                     break
-            if recipient_user:
-                break
+
+        # 4. Check if holder name or email matches an active user
+        if not recipient_user and holder:
+            clean_holder = holder.strip().lower()
+            for u in all_other_users:
+                if u.full_name.strip().lower() == clean_holder or u.email.strip().lower() == clean_holder:
+                    recipient_user = u
+                    break
                 
         # If recipient User B is a registered PocketPay user, reflect sandbox transfer into their account
         tx_recipient = None
         if recipient_user:
             user_banks = [dict(b) for b in (recipient_user.linked_banks or [])]
+            matched_b = False
             for b in user_banks:
                 b_acc = str(b.get('account_number') or '').strip()
                 b_clean = re.sub(r'[\s\-]', '', b_acc)
@@ -281,7 +309,13 @@ class PayoutProvider:
                 if (b_clean and b_clean == clean_target_acc) or (b_mask and b_mask.endswith(clean_target_acc[-4:])):
                     b['balance'] = round(float(b.get('balance', 0.0)) + amount, 2)
                     b['last_synced_at'] = datetime.utcnow().isoformat()
+                    matched_b = True
                     break
+            # If recipient has linked banks but none matched the clean account, credit their primary active bank
+            if not matched_b and user_banks:
+                user_banks[0]['balance'] = round(float(user_banks[0].get('balance', 0.0)) + amount, 2)
+                user_banks[0]['last_synced_at'] = datetime.utcnow().isoformat()
+
             recipient_user.linked_banks = user_banks
             flag_modified(recipient_user, 'linked_banks')
             
@@ -298,6 +332,8 @@ class PayoutProvider:
                 merchant=user.full_name,
                 description=f'Received bank transfer from {user.full_name} ({bank_name} {masked_acc}) [Sandbox Mode]',
                 payment_method='bank_transfer',
+                status='completed',
+                completed_at=datetime.utcnow(),
                 extra_data={
                     'is_sandbox': is_sandbox,
                     'payout_id': payout_id,
@@ -313,7 +349,6 @@ class PayoutProvider:
             )
             tx_recipient.qr_code_url = generate_qr_code(build_qr_tx_url(tx_recipient), 250)
             db.session.add(tx_recipient)
-            tx_recipient.complete()
             
             # Notify recipient
             Notification.transaction_alert(recipient_user.id, tx_recipient)
@@ -334,6 +369,8 @@ class PayoutProvider:
             merchant=holder,
             description=f'Transfer to {holder} ({bank_name} {masked_acc}) via {mode.upper()}',
             payment_method='bank_transfer',
+            status='completed',
+            completed_at=datetime.utcnow(),
             extra_data={
                 'idempotency_key': idempotency_key,
                 'payout': payout_payload,
@@ -349,7 +386,6 @@ class PayoutProvider:
         )
         tx.qr_code_url = generate_qr_code(build_qr_tx_url(tx), 250)
         db.session.add(tx)
-        tx.complete()
         
         Notification.transaction_alert(user.id, tx)
         Notification.create(
@@ -360,7 +396,15 @@ class PayoutProvider:
             'high'
         )
         
-        db.session.commit()
+        try:
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            return {
+                "success": False,
+                "error": f"Database transaction failed: {str(e)}",
+                "code": "TRANSACTION_FAILED"
+            }
         
         return {
             "success": True,

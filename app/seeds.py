@@ -127,9 +127,45 @@ def ensure_demo_accounts_exist():
         db.session.commit()
         print('[Seed] Premium Demo account provisioned: demo.premium@pocketpay.test (DemoPremium@123)')
 
+    # 3. Standard Demo User: demo@pocketpay.app (Demo@123)
+    main_demo_email = 'demo@pocketpay.app'
+    main_demo = User.query.filter_by(email=main_demo_email).first()
+    if not main_demo:
+        main_demo = User(
+            email=main_demo_email,
+            phone='+91 98765 43210',
+            full_name='Demo User',
+            wallet_balance=25000.00,
+            email_verified=True,
+            phone_verified=True,
+            theme_preference='dark',
+            is_premium=True,
+            is_active=True
+        )
+        main_demo.set_password('Demo@123')
+        main_demo.set_transaction_pin('1234')
+        main_demo.generate_virtual_ids()
+        db.session.add(main_demo)
+        db.session.flush()
+
+        p1 = Pocket(user_id=main_demo.id, name='Daily Expenses', color='#6366f1', icon='shopping-bag', current_balance=0.0, budget_amount=5000.0, monthly_limit=5000.0)
+        p2 = Pocket(user_id=main_demo.id, name='Savings', color='#22c55e', icon='piggy-bank', current_balance=0.0, budget_amount=15000.0, monthly_limit=5000.0)
+        db.session.add_all([p1, p2])
+        db.session.commit()
+        print('[Seed] Standard Demo account provisioned: demo@pocketpay.app (Demo@123)')
+    else:
+        main_demo.is_active = True
+        main_demo.email_verified = True
+        if not main_demo.password_hash:
+            main_demo.set_password('Demo@123')
+        if not main_demo.transaction_pin_hash:
+            main_demo.set_transaction_pin('1234')
+        db.session.commit()
+
 
 def seed_database_if_empty():
     ensure_admin_user_exists()
+    ensure_demo_accounts_exist()
     return
     
     pockets_config = [

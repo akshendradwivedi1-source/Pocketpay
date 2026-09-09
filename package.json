@@ -4,6 +4,7 @@
     "@capacitor/core": "^8.5.0",
     "@ngrok/ngrok": "^1.7.0",
     "cloudflared": "^0.7.3",
+    "jsqr": "^1.4.0",
     "localtunnel": "^2.0.2"
   },
   "devDependencies": {

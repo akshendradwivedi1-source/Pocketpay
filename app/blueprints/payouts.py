@@ -31,6 +31,65 @@ def get_saved_beneficiaries():
     })
 
 
+@bp.route('/validate-beneficiary', methods=['POST'])
+@api_login_required
+def validate_beneficiary():
+    """
+    Pre-validates beneficiary account number, IFSC code, and recipient existence.
+    Returns sanitized beneficiary preview for transfer confirmation.
+    """
+    import re
+    from app.models.user import User
+    from app.services.payout_service import validate_account_number, validate_ifsc
+
+    data = request.get_json() or {}
+    acc_num = str(data.get('account_number', '')).strip()
+    ifsc = str(data.get('ifsc_code', '')).strip().upper()
+    holder = str(data.get('account_holder') or data.get('beneficiary_name') or '').strip()
+    bank_name = str(data.get('bank_name', '')).strip() or "Bank Account"
+    
+    if not acc_num or len(acc_num) < 9:
+        return error_response('Beneficiary account number must be 9 to 18 digits', 400)
+    if not validate_account_number(acc_num):
+        return error_response('Invalid bank account number format (9 to 18 digits required)', 400)
+    if ifsc and not validate_ifsc(ifsc):
+        return error_response('Invalid IFSC code format (e.g. SBIN0001234, HDFC0000123)', 400)
+        
+    clean_acc = re.sub(r'[\s\-]', '', acc_num)
+    masked = '•••• ' + clean_acc[-4:]
+    
+    # Check if recipient is a registered PocketPay user
+    recipient_user = None
+    all_users = User.query.filter(User.id != current_user.id).all()
+    for u in all_users:
+        for b in (u.linked_banks or []):
+            b_acc = re.sub(r'[\s\-]', '', str(b.get('account_number') or ''))
+            b_mask = str(b.get('account_mask') or '')
+            if (b_acc and b_acc == clean_acc) or (b_mask and b_mask.endswith(clean_acc[-4:])):
+                recipient_user = u
+                break
+        if recipient_user:
+            break
+        if (u.virtual_wallet_id and u.virtual_wallet_id.upper() == clean_acc.upper()) or \
+           (u.phone and re.sub(r'[\s\-]', '', u.phone) == clean_acc) or \
+           (holder and u.full_name.strip().lower() == holder.strip().lower()):
+            recipient_user = u
+            break
+
+    res_name = recipient_user.full_name if recipient_user else (holder or "Verified Beneficiary")
+
+    return json_response({
+        'valid': True,
+        'account_number': clean_acc,
+        'account_mask': masked,
+        'ifsc_code': ifsc or 'SBIN0001234',
+        'beneficiary_name': res_name,
+        'bank_name': bank_name,
+        'is_registered_member': recipient_user is not None,
+        'recipient_user_id': recipient_user.id if recipient_user else None
+    }, 'Beneficiary validated successfully')
+
+
 @bp.route('/parse-qr', methods=['POST'])
 @api_login_required
 def parse_qr_endpoint():
@@ -221,26 +280,52 @@ def get_payout_status(payout_id):
     })
 
 
+import os
+import hmac
+import hashlib
+
 @bp.route('/webhook', methods=['POST'])
 def payout_webhook():
-    """Webhook endpoint for receiving asynchronous payout events from live payment provider"""
+    """
+    Webhook endpoint for receiving asynchronous payout events from live/sandbox banking provider.
+    Verifies HMAC signature, ensures idempotent event processing, and safely rolls back state on failure.
+    """
+    raw_body = request.get_data()
+    webhook_secret = os.environ.get('WEBHOOK_SECRET') or os.environ.get('PAYOUT_WEBHOOK_SECRET')
+    sig_header = request.headers.get('X-Webhook-Signature') or request.headers.get('X-Signature')
+
+    if webhook_secret:
+        if not sig_header:
+            return error_response('Missing webhook signature header', 401, code='MISSING_SIGNATURE')
+        expected_sig = hmac.new(webhook_secret.encode('utf-8'), raw_body, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected_sig, sig_header):
+            return error_response('Invalid webhook signature', 401, code='INVALID_SIGNATURE')
+
     payload = request.get_json(silent=True) or {}
     event = payload.get('event')
-    payout_id = payload.get('data', {}).get('payout_id')
+    data = payload.get('data') or {}
+    payout_id = data.get('payout_id')
     
     if not payout_id:
-        return json_response(message='Webhook received (No payout ID)', status_code=200)
+        return json_response({'status': 'ignored'}, 'Webhook received (No payout ID)', 200)
         
     # Idempotent status reconciliation
     all_txs = Transaction.query.order_by(Transaction.id.desc()).limit(200).all()
     tx = next((t for t in all_txs if (t.extra_data or {}).get('payout_id') == payout_id or (t.extra_data or {}).get('payout', {}).get('payout_id') == payout_id), None)
     if tx:
-        status = payload.get('data', {}).get('status', 'processed').lower()
+        status = str(data.get('status', 'processed')).lower()
         if status in ('failed', 'reversed') and tx.status != 'failed':
             tx.status = 'failed'
-            # Rollback funds
+            tx.failure_reason = data.get('failure_reason') or 'Bank gateway rejected transfer'
+            # Rollback funds atomically
             user = tx.user
-            user.wallet_balance = round(user.wallet_balance + tx.amount, 2)
+            user.wallet_balance = round(float(user.wallet_balance or 0.0) + float(tx.amount), 2)
             db.session.commit()
+            return json_response({'status': 'reversed', 'payout_id': payout_id}, 'Payout reversed and funds refunded', 200)
+        elif status == 'processed' and tx.status != 'completed':
+            tx.status = 'completed'
+            db.session.commit()
+            return json_response({'status': 'completed', 'payout_id': payout_id}, 'Payout confirmed completed', 200)
             
-    return json_response(message='Webhook processed successfully', status_code=200)
+    return json_response({'status': 'noop', 'payout_id': payout_id}, 'Webhook processed successfully', 200)
+

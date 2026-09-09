@@ -21,12 +21,14 @@ class User(UserMixin, db.Model):
     avatar_url = db.Column(db.String(500), nullable=True)
     
     transaction_pin_hash = db.Column(db.String(255), nullable=True)
+    security_setup_completed = db.Column(db.Boolean, default=False)
     pin_attempts = db.Column(db.Integer, default=0)
     pin_locked_until = db.Column(db.DateTime, nullable=True)
     
-    wallet_balance = db.Column(db.Float, default=0.0)
+    wallet_balance = db.Column(db.Numeric(12, 2, asdecimal=False), default=0.0)
     virtual_wallet_id = db.Column(db.String(20), unique=True, nullable=True)
     virtual_upi_id = db.Column(db.String(50), unique=True, nullable=True)
+    security_version = db.Column(db.Integer, default=1)
     
     email_verified = db.Column(db.Boolean, default=False)
     phone_verified = db.Column(db.Boolean, default=False)
@@ -107,7 +109,16 @@ class User(UserMixin, db.Model):
                 self.pin_locked_until = datetime.utcnow() + timedelta(minutes=lockout_min)
                 self.pin_attempts = 0
             db.session.commit()
-            return False, 'Incorrect PIN'
+            return False, f'Incorrect PIN. {attempts_limit - self.pin_attempts} attempts remaining.'
+
+    def check_transaction_pin(self, pin):
+        """Convenience alias for verifying transaction pin"""
+        success, _ = self.verify_transaction_pin(pin)
+        return success
+
+    @property
+    def is_pin_locked(self):
+        return bool(self.pin_locked_until and self.pin_locked_until > datetime.utcnow())
     
     def create_admin_approval_request(self):
         import secrets
@@ -328,8 +339,37 @@ class User(UserMixin, db.Model):
         from app.models.telegram_user import TelegramUser
         return TelegramUser.query.filter_by(user_id=self.id).first()
 
+    @property
+    def security_setup_required(self):
+        # Explicit check: user requires security setup if neither the flag is set nor a PIN hash exists
+        return not bool(self.security_setup_completed or self.transaction_pin_hash)
+
+    @property
+    def needs_security_onboarding(self):
+        return self.security_setup_required
+
+    @property
+    def total_available_balance(self):
+        return round(float(self.wallet_balance or 0.0), 2)
+
+    @property
+    def connected_bank_balance(self):
+        """Sum of all verified, non-disconnected linked bank account balances."""
+        banks = self.linked_banks or []
+        return round(sum(float(b.get('balance', 0.0) or 0.0) for b in banks if b.get('status') != 'disconnected'), 2)
+
+    @property
+    def own_wallet_balance(self):
+        """
+        Independent PocketPay wallet balance:
+        Available wallet balance minus active connected bank balances.
+        """
+        bank_total = self.connected_bank_balance
+        independent = (self.wallet_balance or 0.0) - bank_total
+        return round(max(0.0, independent), 2)
+
     def total_pocket_balance(self):
-        return sum(p.current_balance for p in self.pockets.filter_by(archived=False).all())
+        return round(sum(float(p.current_balance or 0.0) for p in self.pockets.filter_by(archived=False).all()), 2)
 
     def soft_delete(self):
         """
@@ -375,6 +415,12 @@ class User(UserMixin, db.Model):
                 pass
 
         linked_tg = self.get_linked_telegram_user()
+        w_bal = round(float(self.wallet_balance or 0.0), 2)
+        p_bal = self.total_pocket_balance()
+        bank_bal = self.connected_bank_balance
+        own_bal = self.own_wallet_balance
+        is_sec_setup = bool(self.security_setup_completed or self.transaction_pin_hash)
+
         data = {
             'id': self.id,
             'uuid': self.uuid,
@@ -382,7 +428,10 @@ class User(UserMixin, db.Model):
             'phone': self.phone,
             'full_name': self.full_name,
             'avatar_url': self.avatar_url,
-            'wallet_balance': self.wallet_balance,
+            'wallet_balance': w_bal,
+            'available_balance': w_bal,
+            'connected_bank_balance': bank_bal,
+            'own_wallet_balance': own_bal,
             'virtual_wallet_id': self.virtual_wallet_id,
             'virtual_upi_id': self.virtual_upi_id,
             'email_verified': self.email_verified,
@@ -390,6 +439,8 @@ class User(UserMixin, db.Model):
             'is_premium': self.is_premium,
             'is_admin': bool(self.is_admin),
             'has_transaction_pin': self.transaction_pin_hash is not None,
+            'security_setup_completed': is_sec_setup,
+            'security_setup_required': not is_sec_setup,
             'totp_enabled': bool(self.totp_enabled),
             'has_backup_codes': len(self.totp_backup_codes or []) > 0,
             'backup_codes_count': len(self.totp_backup_codes or []),
@@ -400,11 +451,14 @@ class User(UserMixin, db.Model):
             'theme_preference': self.theme_preference,
             'currency_preference': self.currency_preference,
             'linked_banks': self.linked_banks or [],
-            'total_pocket_balance': self.total_pocket_balance(),
+            'total_pocket_balance': p_bal,
+            'total_funds': round(w_bal + p_bal, 2),
+            'security_onboarding_completed': is_sec_setup,
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }
         if include_sensitive:
             data['pin_attempts'] = self.pin_attempts
             data['pin_locked_until'] = self.pin_locked_until.isoformat() if self.pin_locked_until else None
+            data['security_version'] = self.security_version
         return data
 

@@ -80,6 +80,10 @@ class Config:
     PIN_ATTEMPTS_LIMIT = int(os.environ.get('PIN_ATTEMPTS_LIMIT', 5))
     PIN_LOCKOUT_MINUTES = int(os.environ.get('PIN_LOCKOUT_MINUTES', 15))
     
+    # 6. PocketPay AI Assistant (OpenAI Integration)
+    OPENAI_API_KEY = (os.environ.get('OPENAI_API_KEY') or '').strip()
+    OPENAI_MODEL = (os.environ.get('OPENAI_MODEL') or 'gpt-4o-mini').strip()
+
     REMEMBER_COOKIE_DURATION = timedelta(days=30)
     PERMANENT_SESSION_LIFETIME = timedelta(days=7)
     MAX_CONTENT_LENGTH = 16 * 1024 * 1024

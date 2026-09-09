@@ -159,14 +159,10 @@ def validate_required_fields(data, required_fields):
 
 def get_public_base_url(req=None):
     """
-    Returns the production public HTTPS base URL for all generated QR links,
-    prioritizing APP_BASE_URL config or the request's public HTTPS host.
+    Returns the public base URL for links and QR destinations,
+    prioritizing active request host or APP_BASE_URL config.
     """
     import os
-    if current_app:
-        configured = (current_app.config.get('APP_BASE_URL') or os.environ.get('APP_BASE_URL') or '').strip().rstrip('/')
-        if configured:
-            return configured
     req_obj = req
     if not req_obj:
         try:
@@ -175,26 +171,32 @@ def get_public_base_url(req=None):
                 req_obj = request
         except Exception:
             pass
+
     if req_obj:
         try:
-            proto = req_obj.headers.get('X-Forwarded-Proto', 'https' if getattr(req_obj, 'is_secure', False) else 'http')
+            proto = req_obj.headers.get('X-Forwarded-Proto', 'https' if getattr(req_obj, 'is_secure', False) else req_obj.scheme or 'http')
             host = req_obj.headers.get('X-Forwarded-Host', getattr(req_obj, 'host', ''))
             if host:
                 return f"{proto}://{host}".rstrip('/')
+            if getattr(req_obj, 'host_url', None):
+                return req_obj.host_url.rstrip('/')
         except Exception:
             pass
-    return 'https://pocketpay-1.onrender.com'
+
+    if current_app:
+        configured = (current_app.config.get('APP_BASE_URL') or os.environ.get('APP_BASE_URL') or '').strip().rstrip('/')
+        if configured:
+            return configured
+
+    return 'http://localhost:5000'
 
 
 def build_qr_wallet_url(user, req=None):
-    base = get_public_base_url(req)
-    ident = getattr(user, 'virtual_wallet_id', None) or getattr(user, 'virtual_upi_id', None)
-    if ident:
-        return f"{base}/qr/user/{ident}"
-    upi = getattr(user, 'virtual_upi_id', None) or f"{getattr(user, 'email', '').split('@')[0]}@pocketpay"
+    upi = getattr(user, 'virtual_upi_id', None) or f"{getattr(user, 'email', 'user').split('@')[0]}@pocketpay"
     name = getattr(user, 'full_name', '') or 'User'
     import urllib.parse
-    return f"{base}/qr/pay?user={urllib.parse.quote(upi)}&name={urllib.parse.quote(name)}"
+    # Standard UPI URI payload recognizable by any phone camera, Google Lens, or scanner
+    return f"upi://pay?pa={upi}&pn={urllib.parse.quote(name)}&cu=INR"
 
 
 def build_qr_user_url(user, req=None):
@@ -214,20 +216,30 @@ def build_qr_tx_url(tx, req=None):
 
 
 def generate_qr_code(data_string, size=300):
+    """
+    Generates a genuine, machine-readable black-and-white QR code with
+    standard 4-module quiet zone margin and high contrast for camera scanning.
+    """
     import qrcode
+    from qrcode.constants import ERROR_CORRECT_M
     import io
     import base64
+    from PIL import Image
     try:
         qr = qrcode.QRCode(
             version=None,
-            error_correction=qrcode.constants.ERROR_CORRECT_M,
+            error_correction=ERROR_CORRECT_M,
             box_size=10,
-            border=3,
+            border=4,  # Standard 4-module quiet zone ensures phone camera recognition
         )
-        qr.add_data(data_string)
+        qr.add_data(str(data_string).strip())
         qr.make(fit=True)
-        img = qr.make_image(fill_color="#0a0b14", back_color="#ffffff")
-        img = img.resize((size, size))
+        # High contrast pure black modules on pure white background
+        img = qr.make_image(fill_color="#000000", back_color="#ffffff")
+        if hasattr(Image, 'Resampling'):
+            img = img.resize((size, size), Image.Resampling.NEAREST)
+        else:
+            img = img.resize((size, size))
         buffered = io.BytesIO()
         img.save(buffered, format="PNG")
         img_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')

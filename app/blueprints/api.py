@@ -261,6 +261,7 @@ def dashboard_summary():
     })
 
 
+@bp.route('/assistant', methods=['POST'])
 @bp.route('/assistant/ask', methods=['POST'])
 def assistant_ask():
     from app.services.assistant_service import AssistantService

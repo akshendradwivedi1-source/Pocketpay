@@ -146,6 +146,39 @@ PP.Dashboard = {
       }, 0);
     }
 
+    // ---------- Security Onboarding Prompt (if PIN not set) ----------
+    if (u.security_setup_required || (!u.security_setup_completed && !u.has_transaction_pin)) {
+      const secCard = PP.el('div', {
+        class: 'glass-card',
+        id: 'securitySetupDisclaimerCard',
+        style: 'background:linear-gradient(135deg,rgba(245,158,11,0.12) 0%,rgba(217,119,6,0.08) 100%);border:1px solid rgba(245,158,11,0.35);border-radius:18px;padding:16px 22px;display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;box-shadow:0 4px 20px rgba(245,158,11,0.1);'
+      });
+      secCard.innerHTML = `
+        <div style="display:flex;align-items:center;gap:1rem">
+          <div style="width:42px;height:42px;border-radius:12px;background:rgba(245,158,11,0.2);border:1px solid rgba(245,158,11,0.4);display:flex;align-items:center;justify-content:center;color:#f59e0b;font-size:20px">
+            <i data-lucide="shield-alert"></i>
+          </div>
+          <div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <h4 style="margin:0;font-size:0.95rem;font-weight:700;color:#fff">Security setup required</h4>
+              <span class="chip" style="background:rgba(245,158,11,0.25);color:#fde68a;font-size:0.68rem;padding:1px 6px">Action Needed</span>
+            </div>
+            <p style="margin:4px 0 0;color:var(--text-muted);font-size:0.82rem">Before using PocketPay transfers and other banking features, please create your required security credentials.</p>
+          </div>
+        </div>
+        <button class="btn btn-sm btn-primary" id="setupPinBannerBtn" style="background:#f59e0b;color:#18181b;font-weight:700;border:none">
+          <i data-lucide="shield-check"></i> Create Security Credentials
+        </button>
+      `;
+      wrap.appendChild(secCard);
+      setTimeout(() => {
+        secCard.querySelector('#setupPinBannerBtn')?.addEventListener('click', () => {
+          if (PP.Modals.securitySetup) PP.Modals.securitySetup();
+          else PP.Modals.setupPin();
+        });
+      }, 0);
+    }
+
     // ---------- Balance Card & Quick Actions ----------
     const totalNetWorth = b.total || ((b.wallet || 0) + (b.pockets || 0));
     const availableUnallocated = b.wallet || 0;
@@ -156,7 +189,7 @@ PP.Dashboard = {
         PP.el('div', {}, [
           PP.el('div', { class: 'balance-label' }, [
             PP.el('i', { 'data-lucide': 'wallet' }),
-            'Total Net Worth (Bank + Pockets)',
+            'Total Funds (Available + Pockets)',
             hasBank ? PP.el('span', { class: 'chip', style: 'margin-left:8px;font-size:0.65rem;background:rgba(99,102,241,0.2)' }, ['Demo Sandbox']) : null
           ].filter(Boolean)),
           PP.el('div', { class: 'balance-amount' }, [PP.el('span', { class: 'symbol' }, ['₹']), PP.fmt(totalNetWorth).replace('₹', '')]),
