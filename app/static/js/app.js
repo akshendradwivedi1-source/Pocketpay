@@ -110,9 +110,20 @@ PP.renderView = () => {
     settings: PP.Wallet?.render,
     login: PP.renderAuth,
   };
-  const fn = renderers[route] || (PP.state.user ? PP.Dashboard.render : PP.renderAuth);
-  try { fn(container, PP.state.viewData || {}); }
-  catch (e) { console.error('View render error:', e); container.innerHTML = `<div class="empty-state"><p class="text-muted">Error loading view.</p></div>`; }
+  let fn = renderers[route];
+  if (typeof fn !== 'function') {
+    fn = PP.state.user ? PP.Dashboard?.render : PP.renderAuth;
+  }
+  try {
+    if (typeof fn === 'function') {
+      fn(container, PP.state.viewData || {});
+    } else {
+      container.innerHTML = `<div class="empty-state"><p class="text-muted">Section unavailable.</p></div>`;
+    }
+  } catch (e) {
+    console.error('View render error:', e);
+    container.innerHTML = `<div class="empty-state"><p class="text-muted">Error loading view.</p></div>`;
+  }
   PP.refreshIcons();
   PP.emit('view:rendered', route);
 };

@@ -333,8 +333,8 @@ PP.Premium = {
                       <span class="chip ${r.is_active ? 'success' : ''}" style="font-size:0.75rem">${r.is_active ? 'Active' : 'Disabled'}</span>
                     </div>
                     <p style="margin:0.35rem 0 0;font-size:0.85rem;color:var(--text-muted)">
-                      <b>IF:</b> ${r.trigger_type.replace(/_/g, ' ')} ${r.trigger_threshold ? `(> ₹${r.trigger_threshold:,.2f})` : ''} 
-                      → <b>THEN:</b> ${r.action_type === 'ALLOCATE_PERCENT' ? `Allocate ${r.action_value}%` : `Move ₹${r.action_value:,.2f}`} to <b>${r.target_pocket_name || 'Target Pocket'}</b>
+                      <b>IF:</b> ${r.trigger_type.replace(/_/g, ' ')} ${r.trigger_threshold ? `(> ${PP.fmt(r.trigger_threshold)})` : ''} 
+                      → <b>THEN:</b> ${r.action_type === 'ALLOCATE_PERCENT' ? `Allocate ${r.action_value}%` : `Move ${PP.fmt(r.action_value)}`} to <b>${r.target_pocket_name || 'Target Pocket'}</b>
                     </p>
                     <div style="display:flex;gap:1.5rem;font-size:0.75rem;color:var(--text-dim);margin-top:0.4rem">
                       <span>Executions: <b>${r.execution_count || 0}</b></span>
@@ -444,7 +444,7 @@ PP.Premium = {
             <label style="font-size:0.8rem;color:var(--text-muted);display:block;margin-bottom:0.4rem">Target Pocket</label>
             <select id="ruleTargetPocket" class="form-input" required style="width:100%">
               ${pockets.filter(p => !p.archived).map(p => `
-                <option value="${p.id}">${p.name} (Current: ₹${p.current_balance:,.2f})</option>
+                <option value="${p.id}">${p.name} (Current: ${PP.fmt(p.current_balance)})</option>
               `).join('')}
             </select>
           </div>
@@ -528,7 +528,7 @@ PP.Premium = {
                   <div style="background:rgba(239,68,68,0.08);border-radius:12px;padding:0.75rem 1rem;margin-bottom:1rem;font-size:0.8rem;line-height:1.4">
                     <div style="color:var(--danger);font-weight:600">Reason: ${p.lock_reason || 'Protected savings'}</div>
                     ${p.locked_until_date ? `<div style="color:var(--text-muted);margin-top:2px">Unlock date: ${new Date(p.locked_until_date).toLocaleDateString()}</div>` : ''}
-                    ${p.locked_goal_amount ? `<div style="color:var(--text-muted);margin-top:2px">Goal amount: ₹${p.locked_goal_amount:,.2f}</div>` : ''}
+                    ${p.locked_goal_amount ? `<div style="color:var(--text-muted);margin-top:2px">Goal amount: ${PP.fmt(p.locked_goal_amount)}</div>` : ''}
                   </div>
                 ` : `
                   <p style="font-size:0.8rem;color:var(--text-muted);margin-bottom:1rem">
@@ -662,7 +662,7 @@ PP.Premium = {
             <div class="glass-card" style="padding:1.25rem;border-radius:16px">
               <div style="font-size:0.75rem;color:var(--text-dim);text-transform:uppercase">Actual Liquid Balance</div>
               <div style="font-size:1.5rem;font-weight:800;color:var(--text);margin-top:4px">₹${f.actual_balance.toLocaleString('en-IN', {minimumFractionDigits: 2})}</div>
-              <div style="font-size:0.75rem;color:var(--text-muted);margin-top:2px">Wallet: ₹${f.wallet_balance:,.2f} · Pockets: ₹${f.pockets_balance:,.2f}</div>
+              <div style="font-size:0.75rem;color:var(--text-muted);margin-top:2px">Wallet: ${PP.fmt(f.wallet_balance)} · Pockets: ${PP.fmt(f.pockets_balance)}</div>
             </div>
 
             <div class="glass-card" style="padding:1.25rem;border-radius:16px">
@@ -752,7 +752,7 @@ PP.Premium = {
                   ${subs.map(s => `
                     <tr>
                       <td style="font-weight:600">${s.service || s.merchant_name}</td>
-                      <td style="font-weight:700;color:var(--accent)">₹${s.amount:,.2f}</td>
+                      <td style="font-weight:700;color:var(--accent)">${PP.fmt(s.amount)}</td>
                       <td><span class="chip" style="font-size:0.75rem">${s.frequency}</span></td>
                       <td style="font-size:0.85rem;color:var(--text-muted)">${s.last_payment_date ? new Date(s.last_payment_date).toLocaleDateString() : 'Recent'}</td>
                       <td style="font-size:0.85rem;color:var(--text)">${s.next_expected_date ? new Date(s.next_expected_date).toLocaleDateString() : 'Recurring'}</td>
@@ -947,33 +947,33 @@ PP.Premium = {
           <div style="display:flex;flex-direction:column;gap:0.75rem">
             <div style="display:flex;justify-content:space-between;padding-bottom:0.5rem;border-bottom:1px solid var(--border)">
               <span>Total Income:</span>
-              <span style="font-weight:700;color:var(--text)">₹${s.income:,.2f}</span>
+              <span style="font-weight:700;color:var(--text)">${PP.fmt(s.income)}</span>
             </div>
             <div style="display:flex;justify-content:space-between;color:var(--danger)">
               <span>Fixed Expenses Total:</span>
-              <span style="font-weight:700">- ₹${s.fixed_expenses.total:,.2f}</span>
+              <span style="font-weight:700">- ${PP.fmt(s.fixed_expenses.total)}</span>
             </div>
             <div style="display:flex;justify-content:space-between;padding-bottom:0.5rem;border-bottom:1px solid var(--border);color:var(--success)">
               <span>Net Disposable Surplus:</span>
-              <span style="font-weight:700">₹${s.net_surplus:,.2f}</span>
+              <span style="font-weight:700">${PP.fmt(s.net_surplus)}</span>
             </div>
 
             <div style="background:var(--surface-hover);border-radius:12px;padding:0.75rem 1rem;display:flex;flex-direction:column;gap:0.4rem;font-size:0.85rem">
               <div style="display:flex;justify-content:space-between">
                 <span>🐷 Suggested Savings:</span>
-                <span style="font-weight:700;color:var(--accent)">₹${s.suggested_allocation.savings:,.2f}</span>
+                <span style="font-weight:700;color:var(--accent)">${PP.fmt(s.suggested_allocation.savings)}</span>
               </div>
               <div style="display:flex;justify-content:space-between">
                 <span>🛡️ Suggested Emergency:</span>
-                <span style="font-weight:700;color:var(--accent)">₹${s.suggested_allocation.emergency:,.2f}</span>
+                <span style="font-weight:700;color:var(--accent)">${PP.fmt(s.suggested_allocation.emergency)}</span>
               </div>
               <div style="display:flex;justify-content:space-between">
                 <span>🎬 Suggested Entertainment:</span>
-                <span style="font-weight:700;color:var(--accent)">₹${s.suggested_allocation.entertainment:,.2f}</span>
+                <span style="font-weight:700;color:var(--accent)">${PP.fmt(s.suggested_allocation.entertainment)}</span>
               </div>
               <div style="display:flex;justify-content:space-between">
                 <span>💼 Unallocated Buffer:</span>
-                <span style="font-weight:700;color:var(--text-muted)">₹${s.suggested_allocation.buffer:,.2f}</span>
+                <span style="font-weight:700;color:var(--text-muted)">${PP.fmt(s.suggested_allocation.buffer)}</span>
               </div>
             </div>
           </div>
@@ -1068,11 +1068,11 @@ PP.Premium = {
           <div style="display:flex;flex-direction:column;gap:0.75rem">
             <div style="display:flex;justify-content:space-between;padding-bottom:0.5rem;border-bottom:1px solid var(--border)">
               <span>Total Requested:</span>
-              <span style="font-weight:700">₹${plan.amount:,.2f}</span>
+              <span style="font-weight:700">${PP.fmt(plan.amount)}</span>
             </div>
             <div style="display:flex;justify-content:space-between;color:${plan.can_fulfill ? 'var(--success)' : 'var(--danger)'}">
               <span>Fulfillable Status:</span>
-              <span style="font-weight:700">${plan.can_fulfill ? 'Fully Covered' : `Shortage of ₹${plan.shortage:,.2f}`}</span>
+              <span style="font-weight:700">${plan.can_fulfill ? 'Fully Covered' : `Shortage of ${PP.fmt(plan.shortage)}`}</span>
             </div>
 
             <div style="margin-top:0.5rem">
@@ -1083,8 +1083,8 @@ PP.Premium = {
                 <div style="display:flex;flex-direction:column;gap:0.5rem">
                   ${plan.routes.map(r => `
                     <div style="background:var(--surface-hover);border-radius:10px;padding:0.6rem 0.85rem;display:flex;justify-content:space-between;align-items:center">
-                      <span><b>${r.pocket_name}</b> (Has ₹${r.available_balance:,.2f})</span>
-                      <span style="font-weight:700;color:var(--accent)">Deduct ₹${r.amount_to_debit:,.2f}</span>
+                      <span><b>${r.pocket_name}</b> (Has ${PP.fmt(r.available_balance)})</span>
+                      <span style="font-weight:700;color:var(--accent)">Deduct ${PP.fmt(r.amount_to_debit)}</span>
                     </div>
                   `).join('')}
                 </div>
@@ -1093,7 +1093,7 @@ PP.Premium = {
 
             ${plan.locked_pockets_excluded && plan.locked_pockets_excluded.length > 0 ? `
               <div style="margin-top:0.5rem;background:rgba(239,68,68,0.06);border-radius:10px;padding:0.6rem 0.85rem;font-size:0.75rem;color:var(--danger)">
-                <b>Protected Pockets Excluded:</b> ${plan.locked_pockets_excluded.map(lp => `${lp.name} (₹${lp.balance:,.2f})`).join(', ')}
+                <b>Protected Pockets Excluded:</b> ${plan.locked_pockets_excluded.map(lp => `${lp.name} (${PP.fmt(lp.balance)})`).join(', ')}
               </div>
             ` : ''}
           </div>

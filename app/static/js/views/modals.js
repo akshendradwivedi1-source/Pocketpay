@@ -840,7 +840,7 @@ PP.Modals = {
               if (err.code === 'PAYMENT_APPROVAL_REQUIRED') {
                 const confirmed = await PP.UI.confirm(
                   '⚠️ High-Value Payment Confirmation',
-                  `Payment of ₹${amount:,.2f} exceeds your security threshold. Additional confirmation is required. Proceed with transfer?`,
+                  `Payment of ${PP.fmt(amount)} exceeds your security threshold. Additional confirmation is required. Proceed with transfer?`,
                   { okLabel: 'Authorize & Pay', okClass: 'btn-danger' }
                 );
                 if (confirmed) {
@@ -1055,7 +1055,7 @@ PP.Modals = {
               if (err.code === 'PAYMENT_APPROVAL_REQUIRED') {
                 const confirmed = await PP.UI.confirm(
                   '⚠️ High-Value Payment Confirmation',
-                  `Payment of ₹${amount:,.2f} exceeds your security threshold. Additional confirmation is required. Proceed with transfer?`,
+                  `Payment of ${PP.fmt(amount)} exceeds your security threshold. Additional confirmation is required. Proceed with transfer?`,
                   { okLabel: 'Authorize & Pay', okClass: 'btn-danger' }
                 );
                 if (confirmed) {
