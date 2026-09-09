@@ -2743,6 +2743,25 @@ PP.Modals = {
       { label: 'Edit Pocket Details', sub: 'Change name, budget, icon, or color', icon: 'pencil', color: 'var(--text-muted)', fn: () => { modal.close(); PP.Modals.createPocket(pocket); } },
       { label: 'Delete Pocket', sub: 'Remove pocket (returns funds if remaining)', icon: 'trash-2', color: 'var(--danger)', fn: () => { modal.close(); PP.Modals.deletePocket(pocket); } },
     ];
+    if ((pocket.locked_goal_amount && pocket.current_balance >= pocket.locked_goal_amount) || pocket.is_goal_met || (pocket.is_currently_locked && pocket.current_balance > 0)) {
+      items.unshift({
+        label: '🎉 Goal Reached — Release to Balance',
+        sub: `Unlock pocket and release ${PP.fmt(pocket.current_balance)} to your available balance`,
+        icon: 'gift',
+        color: 'var(--success)',
+        fn: async () => {
+          modal.close();
+          try {
+            const res = await PP.PocketsAPI.releaseGoal(pocket.id);
+            PP.UI.toast('🎉 Goal Released!', `₹${Number(res.released_amount || pocket.current_balance).toLocaleString('en-IN')} added to your available balance!`, 'success');
+            await PP.loadState?.();
+            PP.renderView?.();
+          } catch (err) {
+            PP.UI.toast('Release Failed', err.message || 'Could not release pocket goal', 'error');
+          }
+        }
+      });
+    }
     items.forEach(it => {
       body.appendChild(PP.el('button', {
         class: 'btn btn-outline',
@@ -5295,8 +5314,14 @@ PP.Modals = {
         try {
           submitBtn.disabled = true;
           submitBtn.textContent = 'Depositing...';
-          await PP.GoalsAPI.deposit(goal.id, amt, sourceVal);
-          PP.UI.toast('Deposit Success', `₹${amt.toLocaleString('en-IN')} deposited to "${goal.name}"`, 'success');
+          const res = await PP.GoalsAPI.deposit(goal.id, amt, sourceVal);
+          const isCompleted = res?.goal_completed || res?.data?.goal_completed;
+          const releasedAmt = res?.released_amount || res?.data?.released_amount || (goal.current_amount + amt);
+          if (isCompleted) {
+            PP.UI.toast('🎉 Goal Completed!', `Target reached! ₹${Number(releasedAmt).toLocaleString('en-IN')} has been released to your available balance.`, 'success');
+          } else {
+            PP.UI.toast('Deposit Success', `₹${amt.toLocaleString('en-IN')} deposited to "${goal.name}"`, 'success');
+          }
           modal.close();
           await PP.loadState?.();
           PP.renderView?.();

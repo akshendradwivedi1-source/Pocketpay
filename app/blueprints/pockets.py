@@ -883,3 +883,43 @@ def delete_pocket_rule(rule_id):
     db.session.commit()
     return json_response({}, "Automation rule deleted successfully")
 
+
+@bp.route('/<int:pocket_id>/release-goal', methods=['POST'])
+@api_login_required
+def release_pocket_goal(pocket_id):
+    """Releases completed pocket goal money to available wallet balance"""
+    pocket = Pocket.query.filter_by(id=pocket_id, user_id=current_user.id, archived=False).first()
+    if not pocket:
+        return error_response('Pocket not found', 404)
+    if (pocket.current_balance or 0.0) <= 0:
+        return error_response('Pocket has no balance to release', 400)
+
+    amount = round(float(pocket.current_balance), 2)
+    pocket.deduct_money(amount)
+    current_user.wallet_balance = round((current_user.wallet_balance or 0.0) + amount, 2)
+    pocket.is_locked = False
+    pocket.locked_goal_amount = None
+
+    from app.models.transaction import Transaction
+    tx = Transaction(
+        transaction_id=Transaction.generate_transaction_id(),
+        user_id=current_user.id,
+        from_pocket_id=pocket.id,
+        amount=amount,
+        type='income',
+        category='Goal Release',
+        description=f"Pocket goal completed! ₹{amount:,.2f} released to available balance.",
+        status='completed',
+        source_type='pocket',
+        destination_type='main_balance',
+        completed_at=datetime.utcnow()
+    )
+    db.session.add(tx)
+    db.session.commit()
+
+    return json_response({
+        'pocket': pocket.to_dict(),
+        'wallet_balance': current_user.wallet_balance,
+        'released_amount': amount
+    }, f"₹{amount:,.2f} released to available balance!")
+

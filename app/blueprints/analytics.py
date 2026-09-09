@@ -780,21 +780,84 @@ def deposit_to_goal(goal_id):
         pocket.deduct_money(amount)
 
     goal.deposit(amount)
-    db.session.commit()
 
+    released_amount = 0.0
+    was_released = False
     if goal.is_completed:
+        # Release money from the goal and add to available balance
+        released_amount = goal.release_to_wallet(current_user)
+        was_released = True
+
+        from app.models.transaction import Transaction
+        tx = Transaction(
+            transaction_id=Transaction.generate_transaction_id(),
+            user_id=current_user.id,
+            amount=released_amount,
+            type='income',
+            category='Goal Achievement',
+            description=f"Savings target of ₹{goal.target_amount:,.2f} reached! ₹{released_amount:,.2f} released to available balance.",
+            status='completed',
+            source_type='goal',
+            destination_type='main_balance',
+            completed_at=datetime.utcnow()
+        )
+        db.session.add(tx)
+
         Notification.create(
             current_user.id,
-            '🎉 Savings Goal Achieved!',
-            f'Congratulations! You reached your ₹{goal.target_amount:,.2f} target for "{goal.name}"!',
+            '🎉 Savings Goal Achieved & Released!',
+            f'Congratulations! You reached your ₹{goal.target_amount:,.2f} target for "{goal.name}". ₹{released_amount:,.2f} has been released and added to your available balance!',
             'success',
             'high'
         )
 
+    db.session.commit()
+
+    msg = f'₹{amount:,.2f} deposited to "{goal.name}"'
+    if was_released:
+        msg = f'🎉 Goal reached! ₹{released_amount:,.2f} released and added to your available balance!'
+
     return json_response({
         'goal': goal.to_dict(),
-        'wallet_balance': current_user.wallet_balance
-    }, f'₹{amount:,.2f} deposited to "{goal.name}"')
+        'wallet_balance': current_user.wallet_balance,
+        'goal_completed': goal.is_completed,
+        'released_amount': released_amount
+    }, msg)
+
+
+@bp.route('/goals/<int:goal_id>/release', methods=['POST'])
+@api_login_required
+def release_goal_funds(goal_id):
+    """Releases accumulated goal money directly to available balance upon goal completion"""
+    goal = SavingsGoal.query.filter_by(id=goal_id, user_id=current_user.id).first()
+    if not goal:
+        return error_response('Savings goal not found', 404)
+    if (goal.current_amount or 0.0) <= 0:
+        return error_response('This goal has no funds to release (already released or zero balance)', 400)
+
+    released = goal.release_to_wallet(current_user)
+
+    from app.models.transaction import Transaction
+    tx = Transaction(
+        transaction_id=Transaction.generate_transaction_id(),
+        user_id=current_user.id,
+        amount=released,
+        type='income',
+        category='Goal Achievement',
+        description=f"Savings goal funds for \"{goal.name}\" released to available balance.",
+        status='completed',
+        source_type='goal',
+        destination_type='main_balance',
+        completed_at=datetime.utcnow()
+    )
+    db.session.add(tx)
+    db.session.commit()
+
+    return json_response({
+        'goal': goal.to_dict(),
+        'wallet_balance': current_user.wallet_balance,
+        'released_amount': released
+    }, f"₹{released:,.2f} released to available balance!")
 
 
 @bp.route('/goals/<int:goal_id>/withdraw', methods=['POST'])

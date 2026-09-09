@@ -229,6 +229,20 @@ def create_app(config_name=None):
                     except Exception:
                         pass
 
+            if 'savings_goals' in tables:
+                goal_cols = [c['name'] for c in inspector.get_columns('savings_goals')]
+                g_alter = []
+                if 'released_amount' not in goal_cols:
+                    g_alter.append("ALTER TABLE savings_goals ADD COLUMN released_amount NUMERIC(12,2) DEFAULT 0.0")
+                if 'released_at' not in goal_cols:
+                    g_alter.append(f"ALTER TABLE savings_goals ADD COLUMN released_at {datetime_type}")
+                for stmt in g_alter:
+                    try:
+                        with db.engine.begin() as conn:
+                            conn.execute(text(stmt))
+                    except Exception:
+                        pass
+
             try:
                 db.create_all()
             except Exception:

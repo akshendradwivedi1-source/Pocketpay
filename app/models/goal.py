@@ -20,6 +20,8 @@ class SavingsGoal(db.Model):
     icon = db.Column(db.String(50), default='target')
     color = db.Column(db.String(20), default='#6366f1')
     is_completed = db.Column(db.Boolean, default=False)
+    released_amount = db.Column(db.Float, default=0.0)
+    released_at = db.Column(db.DateTime, nullable=True)
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -36,6 +38,23 @@ class SavingsGoal(db.Model):
         if self.current_amount >= self.target_amount and self.target_amount > 0:
             self.is_completed = True
         return self.current_amount
+
+    def release_to_wallet(self, user) -> float:
+        """
+        Releases the completed goal savings and transfers them directly into the user's available wallet balance.
+        """
+        amount_to_release = round(float(self.current_amount or 0.0), 2)
+        if amount_to_release <= 0:
+            return 0.0
+        
+        self.released_amount = round(float(self.released_amount or 0.0) + amount_to_release, 2)
+        self.released_at = datetime.utcnow()
+        self.current_amount = 0.0
+        self.is_completed = True
+
+        # Directly add to user's available balance
+        user.wallet_balance = round(float(user.wallet_balance or 0.0) + amount_to_release, 2)
+        return amount_to_release
 
     def withdraw(self, amount: float) -> float:
         """Withdraws money from this goal"""
@@ -78,5 +97,7 @@ class SavingsGoal(db.Model):
             'icon': self.icon,
             'color': self.color,
             'is_completed': self.is_completed,
+            'released_amount': float(self.released_amount or 0.0),
+            'released_at': self.released_at.isoformat() if self.released_at else None,
             'created_at': self.created_at.isoformat() if self.created_at else None
         }

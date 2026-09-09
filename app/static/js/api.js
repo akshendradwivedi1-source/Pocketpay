@@ -735,6 +735,7 @@ PP.PocketsAPI = {
   transactions(id, params = {}) { return PP.API.get(`/api/pockets/${id}/transactions`, params); },
   qr(id) { return PP.API.get(`/api/pockets/${id}/qr`); },
   lookup(ref) { return PP.API.get(`/api/pockets/lookup/${encodeURIComponent(ref)}`); },
+  releaseGoal(id) { return PP.API.post(`/api/pockets/${id}/release-goal`, {}); },
 };
 
 // ========== Transactions ==========
@@ -819,6 +820,7 @@ PP.GoalsAPI = {
   update(id, payload) { return PP.API.put(`/api/analytics/goals/${id}`, payload); },
   deposit(id, amount, source = 'wallet') { return PP.API.post(`/api/analytics/goals/${id}/deposit`, { amount, source }); },
   withdraw(id, amount) { return PP.API.post(`/api/analytics/goals/${id}/withdraw`, { amount }); },
+  release(id) { return PP.API.post(`/api/analytics/goals/${id}/release`, {}); },
   delete(id) { return PP.API.delete(`/api/analytics/goals/${id}`); },
 };
 
