@@ -17,8 +17,11 @@ def get_database_uri():
     raw_url = (os.environ.get('DATABASE_URL') or '').strip()
     if raw_url and '://' in raw_url:
         if raw_url.startswith('postgres://'):
-            return raw_url.replace('postgres://', 'postgresql://', 1)
+            raw_url = raw_url.replace('postgres://', 'postgresql://', 1)
         if raw_url.startswith('postgresql://'):
+            if 'sslmode=' not in raw_url and 'localhost' not in raw_url and '127.0.0.1' not in raw_url:
+                separator = '&' if '?' in raw_url else '?'
+                raw_url = f"{raw_url}{separator}sslmode=prefer"
             return raw_url
         if raw_url.startswith('sqlite:///'):
             db_name = os.path.basename(raw_url[len('sqlite:///'):])

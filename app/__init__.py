@@ -31,7 +31,11 @@ def create_app(config_name=None):
     def load_user(user_id):
         try:
             return db.session.get(User, int(user_id))
-        except (TypeError, ValueError):
+        except Exception:
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
             return None
     
     from app.blueprints.main import bp as main_bp
@@ -133,10 +137,19 @@ def create_app(config_name=None):
 
     @app.errorhandler(500)
     def handle_server_error(e):
+        import traceback
+        app.logger.error(f"[Unhandled Server Error on {request.path}] {e}\n{traceback.format_exc()}")
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
         if is_api_request():
-            app.logger.error(f"[Unhandled Server Error on {request.path}] {e}")
             return jsonify({'success': False, 'message': 'Internal server error. Please try again later.', 'code': 'SERVER_ERROR'}), 500
-        return e
+        try:
+            from flask import render_template
+            return render_template('index.html'), 200
+        except Exception:
+            return e
     
     with app.app_context():
         from sqlalchemy import inspect, text
