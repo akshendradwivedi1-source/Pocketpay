@@ -12,13 +12,28 @@ else:
 
 
 def get_database_uri():
+    import socket
+    import urllib.parse
     instance_dir = os.path.abspath(os.path.join(BASE_DIR, '..', 'instance'))
     os.makedirs(instance_dir, exist_ok=True)
+    sqlite_fallback = 'sqlite:///' + os.path.join(instance_dir, 'pocketpay.db').replace('\\', '/')
+
     raw_url = (os.environ.get('DATABASE_URL') or '').strip()
     if raw_url and '://' in raw_url:
         if raw_url.startswith('postgres://'):
             raw_url = raw_url.replace('postgres://', 'postgresql://', 1)
         if raw_url.startswith('postgresql://'):
+            # Pre-flight DNS resolution check: If cloud DB host is unresolvable/expired, fallback to SQLite
+            hostname = ''
+            try:
+                parsed = urllib.parse.urlsplit(raw_url)
+                hostname = parsed.hostname or ''
+                if hostname and hostname not in ('localhost', '127.0.0.1'):
+                    socket.gethostbyname(hostname)
+            except Exception as dns_err:
+                print(f"[DB Auto-Fallback] PostgreSQL host '{hostname}' cannot be resolved ({dns_err}). Auto-falling back to SQLite to prevent 500 crashes!")
+                return sqlite_fallback
+
             if 'sslmode=' not in raw_url and 'localhost' not in raw_url and '127.0.0.1' not in raw_url:
                 separator = '&' if '?' in raw_url else '?'
                 raw_url = f"{raw_url}{separator}sslmode=prefer"
@@ -29,7 +44,7 @@ def get_database_uri():
                 db_name = 'pocketpay.db'
             return 'sqlite:///' + os.path.join(instance_dir, db_name).replace('\\', '/')
         return raw_url
-    return 'sqlite:///' + os.path.join(instance_dir, 'pocketpay.db').replace('\\', '/')
+    return sqlite_fallback
 
 
 
