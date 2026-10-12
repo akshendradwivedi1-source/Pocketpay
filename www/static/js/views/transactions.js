@@ -196,9 +196,9 @@ PP.Transactions = {
     return groups;
   },
 
-  renderRow(t) {
-    const isExpense = t.type === 'expense';
-    const isIncome = ['income', 'topup', 'refund'].includes(t.type);
+    renderRow(t) {
+    const isExpense = t.type === 'expense' || t.type === 'debit';
+    const isIncome = ['income', 'topup', 'refund', 'credit'].includes(t.type);
     const isTransfer = t.type === 'transfer';
     const icon = isExpense ? 'arrow-up-right' : (isIncome ? 'arrow-down-left' : 'refresh-ccw');
     const iconClass = isExpense ? 'expense' : (isIncome ? 'income' : 'transfer');
@@ -207,20 +207,29 @@ PP.Transactions = {
     const pocket = t.from_pocket || t.to_pocket;
 
     const row = PP.el('div', { class: 'tx-item', onclick: () => PP.Modals.transactionDetail(t) });
+    const bookingRef = t.reference_id || t.extra_data?.booking_id;
+    const merchantOrTitle = t.merchant || t.category || (isTransfer ? 'Transfer' : (isIncome ? 'Money Received' : 'Payment'));
+
     row.innerHTML = `
       <div class="tx-icon ${iconClass}"><i data-lucide="${icon}"></i></div>
       <div class="tx-info">
-        <div class="tx-title">${t.merchant || t.category || (isTransfer ? 'Transfer' : (isIncome ? 'Money Received' : 'Payment'))}</div>
+        <div class="tx-title" style="display:flex;align-items:center;gap:6px">
+          <span>${merchantOrTitle}</span>
+          ${isExpense ? `<span class="chip danger" style="font-size:0.65rem;padding:2px 6px;line-height:1;border-radius:4px;font-weight:800">DEBIT</span>` : ''}
+          ${bookingRef ? `<span style="font-family:monospace;font-size:0.75rem;color:var(--accent);font-weight:700">#${bookingRef}</span>` : ''}
+        </div>
         <div class="tx-sub">
           ${pocket ? `<span class="tx-pocket-chip" style="--chip-color:${pocket.color || '#6366f1'}">${pocket.name}</span>` : ''}
-          <span>${t.category || t.type}</span>
+          <span>${t.description || t.category || t.type}</span>
           <span>${PP.formatTimeAgo(t.created_at)}</span>
         </div>
       </div>
       <div class="tx-right">
-        <div class="tx-amount ${amountCls}">${amountSign}${PP.fmt(t.amount).replace('₹', '₹')}</div>
+        <div class="tx-amount ${amountCls}">${amountSign}${PP.fmt(t.amount)}</div>
         <div class="tx-time">${PP.formatTime(t.created_at)}</div>
-        ${t.status !== 'completed' ? `<div class="tx-status-chip ${t.status}">${t.status}</div>` : ''}
+        <div class="tx-status-chip ${t.status === 'completed' ? 'success' : t.status}" style="font-size:0.68rem;font-weight:800;text-transform:uppercase">
+          ${t.status === 'completed' ? 'SUCCESS' : t.status}
+        </div>
       </div>
     `;
     return row;

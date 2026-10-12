@@ -45,7 +45,9 @@ PP.API = {
   delete(u, body) { return this.request(u, { method: 'DELETE', body }); },
 };
 
-// ========== Auth ==========
+PP.api = (u, method = 'GET', body = null) => {
+  return PP.API.request(u, { method: (method || 'GET').toUpperCase(), body });
+};
 PP.Auth = {
   async login(email, password, remember = false) {
     return PP.API.post('/auth/login', { email, password, remember });
@@ -849,6 +851,12 @@ PP.PremiumAPI = {
   },
   verifyPayment(payload) {
     return PP.API.post('/api/premium/verify-payment', payload);
+  },
+  initiatePocketPay(payload) {
+    return PP.API.post('/api/premium/pocketpay/initiate', payload);
+  },
+  confirmPocketPay(payload) {
+    return PP.API.post('/api/premium/pocketpay/confirm', payload);
   },
   cancel() {
     return PP.API.post('/api/premium/cancel', {});

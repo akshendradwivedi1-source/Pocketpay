@@ -2284,8 +2284,11 @@ PP.Modals = {
       ]),
     ]);
     body.appendChild(row('Date & Time', PP.formatDateTime(tx.created_at || tx.date)));
-    body.appendChild(row('Category', tx.category || '—'));
+    body.appendChild(row('Type', isExp ? 'DEBIT' : (tx.type || 'Transaction').toUpperCase()));
+    body.appendChild(row('Status', (tx.status === 'completed' || tx.status === 'success') ? 'SUCCESS' : (tx.status || '').toUpperCase()));
     if (tx.merchant) body.appendChild(row('Merchant', tx.merchant));
+    if (tx.reference_id || tx.extra_data?.booking_id) body.appendChild(row('Booking ID', tx.reference_id || tx.extra_data?.booking_id, true));
+    body.appendChild(row('Category', tx.category || '—'));
     if (tx.from_pocket_name || tx.from_pocket_id) body.appendChild(row('From', tx.from_pocket_name || `Pocket #${tx.from_pocket_id}`));
     if (tx.to_pocket_name || tx.to_pocket_id) body.appendChild(row('To', tx.to_pocket_name || `Pocket #${tx.to_pocket_id}`));
     if (tx.payment_method) body.appendChild(row('Method', tx.payment_method));
@@ -2986,7 +2989,9 @@ PP.Modals = {
         const res = await PP.QRAPI.resolve(rawString);
         modal.close();
 
-        if (res?.type === 'user' && res.user) {
+        if (res?.type === 'merchant_payment' && res.payment_request) {
+          PP.Modals.confirmTravelEasePayment(res.payment_request);
+        } else if (res?.type === 'user' && res.user) {
           PP.Modals.sendMoney({
             recipient: res.user.virtual_upi_id || res.user.virtual_wallet_id || res.user.email,
             resolvedUser: res.user
@@ -5796,7 +5801,300 @@ PP.Modals = {
     }
 
     PP.refreshIcons();
-  }
+  },
+
+  // =========================================================================
+  // TRAVELEASE & MERCHANT QR PAYMENT CONFIRMATION FLOW
+  // =========================================================================
+  confirmTravelEasePayment(pr) {
+    if (!pr) return;
+    const reqId = pr.request_id || pr.payment_request_id;
+    const merchant = pr.merchant || 'TravelEase';
+    const bookingId = pr.booking_id || '';
+    const reference = pr.reference || bookingId;
+    const rawType = (pr.booking_type || 'flight').toLowerCase();
+    const currency = pr.currency || 'INR';
+    const amount = Number(pr.amount || 0);
+
+    const typeConfigs = {
+      flight: { icon: 'plane', label: 'Flight Booking', color: '#0284c7', badge: 'info' },
+      train: { icon: 'train', label: 'Train Booking', color: '#d97706', badge: 'warning' },
+      bus: { icon: 'bus', label: 'Bus Booking', color: '#16a34a', badge: 'success' },
+      cab: { icon: 'car', label: 'Cab Booking', color: '#eab308', badge: 'accent' },
+      hotel: { icon: 'building-2', label: 'Hotel Booking', color: '#9333ea', badge: 'primary' },
+      package: { icon: 'package', label: 'Holiday Package', color: '#0d9488', badge: 'secondary' }
+    };
+    const cfg = typeConfigs[rawType] || typeConfigs.flight;
+
+    const userBal = Number(PP.state.user?.wallet_balance || 0);
+    const hasEnough = userBal >= amount;
+    const shortfall = Math.max(0, amount - userBal);
+
+    const modal = PP.UI.modal({
+      title: `${merchant} ${cfg.label}`,
+      subtitle: `Booking Reference: ${reference}`,
+      icon: cfg.icon,
+      iconClass: 'bg-accent',
+      size: 'md'
+    });
+
+    const body = PP.el('div', { style: 'display:flex;flex-direction:column;gap:1.25rem' });
+
+    // Payment Card
+    const card = PP.el('div', {
+      class: 'glass-card',
+      style: 'padding:1.5rem;text-align:center;border:1px solid rgba(99,102,241,0.3);background:linear-gradient(180deg,rgba(99,102,241,0.1) 0%,rgba(0,0,0,0.2) 100%)'
+    });
+    card.innerHTML = `
+      <div style="font-size:0.8rem;text-transform:uppercase;letter-spacing:0.1em;font-weight:700;color:var(--accent);margin-bottom:0.4rem">
+        Amount to Pay
+      </div>
+      <div style="font-family:var(--font-display);font-size:2.5rem;font-weight:900;color:#fff;margin-bottom:0.75rem">
+        ₹${amount.toLocaleString('en-IN', {minimumFractionDigits: 2})}
+      </div>
+      <div style="display:flex;gap:6px;justify-content:center;align-items:center">
+        <span class="chip ${cfg.badge}" style="font-size:0.75rem">
+          <i data-lucide="${cfg.icon}" style="width:12px;height:12px;margin-right:4px"></i> ${cfg.label}
+        </span>
+        <span class="chip success" style="font-size:0.75rem">
+          <i data-lucide="shield-check" style="width:12px;height:12px;margin-right:4px"></i> Backend Verified
+        </span>
+      </div>
+    `;
+    body.appendChild(card);
+
+    // Detail breakdown - Shows: TravelEase, Booking ID, Booking Type, Amount, Currency, Reference
+    const details = PP.el('div', {
+      class: 'glass-card',
+      style: 'padding:1rem;display:flex;flex-direction:column;gap:0.6rem;font-size:0.85rem'
+    });
+    details.innerHTML = `
+      <div style="display:flex;justify-content:space-between;color:var(--text-muted)">
+        <span>Merchant</span>
+        <strong style="color:var(--text)">${merchant}</strong>
+      </div>
+      <div style="display:flex;justify-content:space-between;color:var(--text-muted)">
+        <span>Booking ID</span>
+        <strong style="color:var(--text);font-family:monospace">${bookingId}</strong>
+      </div>
+      <div style="display:flex;justify-content:space-between;color:var(--text-muted)">
+        <span>Booking Type</span>
+        <span class="chip ${cfg.badge}" style="font-size:0.72rem;padding:2px 8px">${cfg.label}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;color:var(--text-muted)">
+        <span>Reference</span>
+        <strong style="color:var(--accent);font-family:monospace">${reference}</strong>
+      </div>
+      <div style="display:flex;justify-content:space-between;color:var(--text-muted)">
+        <span>Amount & Currency</span>
+        <strong style="color:#fff">₹${amount.toLocaleString('en-IN', {minimumFractionDigits: 2})} (${currency})</strong>
+      </div>
+      <div style="display:flex;justify-content:space-between;color:var(--text-muted);border-top:1px solid rgba(255,255,255,0.08);padding-top:0.6rem">
+        <span>Available Wallet Balance</span>
+        <strong style="color:${hasEnough ? 'var(--success)' : 'var(--danger)'}">₹${userBal.toLocaleString('en-IN', {minimumFractionDigits: 2})}</strong>
+      </div>
+    `;
+    body.appendChild(details);
+
+    if (!hasEnough) {
+      const warn = PP.el('div', {
+        class: 'alert alert-danger',
+        style: 'font-size:0.82rem;padding:0.75rem 1rem;border-radius:10px;background:rgba(239,68,68,0.15);border:1px solid #ef4444;color:#fca5a5'
+      }, [`Insufficient PocketPay balance. You are short by ₹${shortfall.toLocaleString('en-IN', {minimumFractionDigits: 2})}. Please top up your wallet.`]);
+      body.appendChild(warn);
+    }
+
+    const promptText = PP.el('div', {
+      style: 'text-align:center;font-size:0.95rem;font-weight:600;color:var(--text)'
+    }, [`Confirm payment of ₹${amount.toLocaleString('en-IN', {minimumFractionDigits: 2})} to ${merchant}?`]);
+    body.appendChild(promptText);
+
+    modal.body.innerHTML = '';
+    modal.body.appendChild(body);
+
+    modal.footer.innerHTML = '';
+    const cancelBtn = PP.el('button', { class: 'btn btn-ghost', onclick: () => modal.close() }, ['Cancel']);
+    let isSubmitting = false;
+    const confirmBtn = PP.el('button', {
+      class: 'btn btn-primary',
+      disabled: !hasEnough,
+      style: 'font-weight:700',
+      onclick: async () => {
+        if (isSubmitting) return; // Prevent double click
+        isSubmitting = true;
+        confirmBtn.disabled = true;
+        confirmBtn.innerHTML = '<i class="spin" data-lucide="loader-2"></i> Sending OTP...';
+        try {
+          const otpResp = await PP.API.post('/api/v1/payments/request-otp-for-request', {
+            payment_request_id: reqId,
+            identifier: PP.state.user?.virtual_wallet_id || PP.state.user?.email
+          });
+
+          modal.close();
+          PP.Modals.promptOtpForPayment({
+            payment_request_id: reqId,
+            merchant: merchant,
+            booking_id: bookingId,
+            booking_type: rawType,
+            reference: reference,
+            amount: amount,
+            currency: currency,
+            masked_destination: otpResp?.masked_destination || 'your registered email'
+          });
+        } catch (e) {
+          isSubmitting = false;
+          confirmBtn.disabled = false;
+          confirmBtn.textContent = 'Confirm Payment';
+          PP.UI.toast('OTP Error', e.message || 'Could not request OTP', 'error');
+        }
+      }
+    }, ['Confirm Payment']);
+
+    modal.footer.append(cancelBtn, confirmBtn);
+    PP.refreshIcons();
+  },
+
+  promptOtpForPayment(opts) {
+    const modal = PP.UI.modal({
+      title: 'Enter Verification OTP',
+      subtitle: `Payment of ₹${opts.amount.toLocaleString('en-IN', {minimumFractionDigits: 2})} to ${opts.merchant}`,
+      icon: 'key',
+      iconClass: 'bg-accent',
+      size: 'sm'
+    });
+
+    const body = PP.el('div', { style: 'display:flex;flex-direction:column;gap:1rem;text-align:center' });
+    body.innerHTML = `
+      <p style="font-size:0.82rem;color:var(--text-muted);margin:0">
+        Enter the 6-digit OTP sent to <strong>${opts.masked_destination}</strong>
+      </p>
+      <input type="text" id="ppPaymentOtpInput" maxlength="6" class="form-input" 
+             placeholder="······" 
+             style="text-align:center;font-family:monospace;font-size:1.75rem;letter-spacing:10px;font-weight:800;padding:12px;" />
+      <div style="font-size:0.72rem;color:var(--text-dim)">
+        <i data-lucide="shield-check" style="width:12px;height:12px;color:var(--success)"></i> Zero banking passwords or PINs requested.
+      </div>
+    `;
+
+    modal.body.innerHTML = '';
+    modal.body.appendChild(body);
+
+    modal.footer.innerHTML = '';
+    const cancelBtn = PP.el('button', { class: 'btn btn-ghost', onclick: () => modal.close() }, ['Cancel']);
+    let isAuthorizing = false;
+    const payBtn = PP.el('button', {
+      class: 'btn btn-primary',
+      style: 'font-weight:700',
+      onclick: async () => {
+        if (isAuthorizing) return; // Prevent double click
+        const inp = document.getElementById('ppPaymentOtpInput');
+        const otp = (inp?.value || '').trim();
+        if (!otp || otp.length < 4) {
+          return PP.UI.toast('OTP Required', 'Please enter the 6-digit verification code', 'warning');
+        }
+
+        isAuthorizing = true;
+        payBtn.disabled = true;
+        payBtn.innerHTML = '<i class="spin" data-lucide="loader-2"></i> Authorizing Debit...';
+
+        try {
+          const res = await PP.API.post('/api/v1/payments/pay-request', {
+            payment_request_id: opts.payment_request_id,
+            otp: otp,
+            identifier: PP.state.user?.virtual_wallet_id || PP.state.user?.email
+          });
+
+          if (res?.success) {
+            modal.close();
+            if (res.new_balance !== undefined && PP.state.user) {
+              PP.state.user.wallet_balance = res.new_balance;
+            }
+            PP.UI.toast('Payment Successful', `₹${opts.amount.toLocaleString('en-IN', {minimumFractionDigits: 2})} paid to ${opts.merchant}`, 'success');
+            
+            PP.Modals.showTravelEaseReceipt({
+              transaction_id: res.transaction_id,
+              booking_id: opts.booking_id,
+              booking_type: opts.booking_type || res.booking_type,
+              reference: opts.reference || res.reference,
+              merchant: opts.merchant,
+              amount: opts.amount,
+              new_balance: res.new_balance
+            });
+
+            PP.refreshCurrentView();
+          } else {
+            throw new Error(res?.message || 'Payment authorization rejected');
+          }
+        } catch (err) {
+          isAuthorizing = false;
+          payBtn.disabled = false;
+          payBtn.textContent = 'Verify & Authorize Payment';
+          PP.UI.toast('Payment Failed', err.message || 'Invalid OTP or authorization error', 'error');
+        }
+      }
+    }, ['Verify & Authorize Payment']);
+
+    modal.footer.append(cancelBtn, payBtn);
+    PP.refreshIcons();
+    setTimeout(() => document.getElementById('ppPaymentOtpInput')?.focus(), 150);
+  },
+
+  showTravelEaseReceipt(data) {
+    const modal = PP.UI.modal({
+      title: 'Payment Successful',
+      subtitle: `Transaction #${data.transaction_id}`,
+      icon: 'check-circle-2',
+      iconClass: 'bg-success',
+      size: 'md'
+    });
+    const body = PP.el('div', { style: 'display:flex;flex-direction:column;gap:1rem' });
+    const bType = (data.booking_type || 'flight').toUpperCase();
+    body.innerHTML = `
+      <div class="glass-card" style="padding:1.5rem;text-align:center;border:1px solid rgba(16,185,129,0.3);background:linear-gradient(180deg,rgba(16,185,129,0.1) 0%,rgba(0,0,0,0.2) 100%)">
+        <div style="font-size:0.75rem;text-transform:uppercase;font-weight:700;color:var(--success);letter-spacing:0.1em;margin-bottom:0.3rem">
+          DEBIT SUCCESSFUL
+        </div>
+        <div style="font-family:var(--font-display);font-size:2.25rem;font-weight:900;color:#fff;margin-bottom:0.5rem">
+          -₹${Number(data.amount).toLocaleString('en-IN', {minimumFractionDigits: 2})}
+        </div>
+        <div class="chip success">SUCCESS</div>
+      </div>
+      <div class="glass-card" style="padding:1rem;display:flex;flex-direction:column;gap:0.6rem;font-size:0.85rem">
+        <div style="display:flex;justify-content:space-between;color:var(--text-muted)">
+          <span>Merchant</span>
+          <strong style="color:var(--text)">${data.merchant || 'TravelEase'}</strong>
+        </div>
+        <div style="display:flex;justify-content:space-between;color:var(--text-muted)">
+          <span>Booking Reference</span>
+          <strong style="color:var(--text);font-family:monospace">${data.reference || data.booking_id}</strong>
+        </div>
+        <div style="display:flex;justify-content:space-between;color:var(--text-muted)">
+          <span>Booking Type</span>
+          <span class="chip primary" style="font-size:0.72rem;padding:2px 8px">${bType}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;color:var(--text-muted)">
+          <span>PocketPay Transaction ID</span>
+          <strong style="color:var(--text);font-family:monospace">${data.transaction_id}</strong>
+        </div>
+        <div style="display:flex;justify-content:space-between;color:var(--text-muted)">
+          <span>Payment Status</span>
+          <strong style="color:var(--success)">CONFIRMED / SUCCESS</strong>
+        </div>
+        <div style="display:flex;justify-content:space-between;color:var(--text-muted)">
+          <span>Updated Wallet Balance</span>
+          <strong style="color:var(--accent)">₹${Number(data.new_balance || 0).toLocaleString('en-IN', {minimumFractionDigits: 2})}</strong>
+        </div>
+      </div>
+    `;
+    modal.body.innerHTML = '';
+    modal.body.appendChild(body);
+    modal.footer.innerHTML = '';
+    modal.footer.appendChild(PP.el('button', {
+      class: 'btn btn-primary btn-block',
+      onclick: () => { modal.close(); PP.navigate('transactions'); }
+    }, ['View in Transactions']));
+    PP.refreshIcons();
+  },
 };
 
 

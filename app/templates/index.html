@@ -226,5 +226,26 @@
 <script src="/static/js/views/modals.js?v=2.1.0"></script>
 <script src="/static/js/assistant.js?v=2.1.0"></script>
 <script src="/static/js/init.js?v=2.1.0"></script>
+<script>
+(function() {
+  setTimeout(function() {
+    var loader = document.getElementById('appLoader');
+    if (loader && !loader.classList.contains('loaded')) {
+      console.warn('[Watchdog Failsafe] Forcefully dismissing loader to unblock UI');
+      loader.classList.add('loaded');
+      setTimeout(function() { loader.style.display = 'none'; }, 400);
+      var app = document.getElementById('app');
+      if (app) app.classList.remove('hidden');
+      if (window.PP) {
+        if (!window.PP.state?.user && window.PP.renderAuth) {
+          window.PP.renderAuth();
+        } else if (window.PP.renderView) {
+          window.PP.renderView();
+        }
+      }
+    }
+  }, 3500);
+})();
+</script>
 </body>
 </html>

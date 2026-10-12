@@ -211,6 +211,128 @@ def api_qr_transaction(tx_ref):
     })
 
 
+def _resolve_travelease_qr(merchant='TravelEase', booking_id='', req_id='', booking_type=None, version='1', qr_amount=None, reference=None):
+    """
+    Authoritatively resolves, validates, and prepares TravelEase QR codes for payment.
+    Enforces amount verification, duplicate prevention, and booking type normalization.
+    """
+    from app.services.travelease_service import TravelEaseService, VALID_BOOKING_TYPES
+    from app.models.payment_request import PaymentRequest
+    from app.models.transaction import Transaction
+    from app.blueprints.partner_payments import generate_request_signature
+    from datetime import datetime, timedelta
+    from app.extensions import db
+
+    merchant = str(merchant or 'TravelEase').strip()
+    if merchant.lower() != 'travelease':
+        return jsonify({'success': False, 'error': f'Unknown merchant: {merchant}'}), 400
+
+    if version and str(version).strip() != '1':
+        return jsonify({'success': False, 'error': 'Unsupported QR version'}), 400
+
+    raw_bt = booking_type
+    normalized_bt = TravelEaseService.normalize_booking_type(raw_bt or 'flight')
+    if raw_bt and normalized_bt not in VALID_BOOKING_TYPES:
+        return jsonify({'success': False, 'error': f'Invalid booking type: {raw_bt}'}), 400
+
+    if qr_amount is not None:
+        try:
+            qr_amount = float(qr_amount)
+            if qr_amount <= 0:
+                raise ValueError()
+        except (ValueError, TypeError):
+            return jsonify({'success': False, 'error': 'Invalid payment amount'}), 400
+
+    target_bid = str(booking_id or req_id).strip()
+    if not target_bid:
+        return jsonify({'success': False, 'error': 'Booking ID or payment request ID missing'}), 400
+
+    # 1. Duplicate completed payment check in ledger
+    existing_tx = Transaction.query.filter(
+        (Transaction.reference_id == target_bid) | (Transaction.external_booking_id == target_bid),
+        Transaction.merchant == 'TravelEase',
+        Transaction.status == 'completed'
+    ).first()
+
+    pr = None
+    if req_id:
+        pr = PaymentRequest.query.filter_by(request_id=req_id).first()
+    if not pr and booking_id:
+        pr = PaymentRequest.query.filter_by(booking_id=booking_id).order_by(PaymentRequest.created_at.desc()).first()
+
+    if existing_tx or (pr and pr.status == 'paid'):
+        txn_id = existing_tx.transaction_id if existing_tx else pr.transaction_id
+        return jsonify({
+            'success': False,
+            'already_paid': True,
+            'error': 'Payment already completed',
+            'message': 'Payment already completed',
+            'transaction_id': txn_id
+        }), 400
+
+    # 2. Existing PaymentRequest validation
+    if pr:
+        if pr.is_expired():
+            return jsonify({'success': False, 'error': 'Payment request has expired'}), 400
+
+        db_amount = float(pr.amount)
+        if qr_amount is not None and abs(qr_amount - db_amount) > 0.01:
+            return jsonify({'success': False, 'error': 'Amount mismatch / tampered QR'}), 400
+
+        return jsonify({
+            'success': True,
+            'type': 'merchant_payment',
+            'payment_request': pr.to_dict()
+        })
+
+    # 3. Remote / Database verification against TravelEase
+    target_bid_for_verify = booking_id or req_id
+    verify_res = TravelEaseService.verify_booking(target_bid_for_verify, client_amount=qr_amount, booking_type=normalized_bt)
+    if not verify_res.get('success'):
+        status_code = 400 if verify_res.get('error') in ('ALREADY_PAID', 'AMOUNT_MISMATCH', 'INVALID_BOOKING') else (404 if verify_res.get('error') == 'BOOKING_NOT_FOUND' else 503)
+        return jsonify({
+            'success': False,
+            'already_paid': verify_res.get('already_paid', False),
+            'error': verify_res.get('message', 'Booking verification failed'),
+            'message': verify_res.get('message', 'Booking verification failed')
+        }), status_code
+
+    verified_amount = verify_res.get('amount')
+    if verified_amount is None or float(verified_amount) <= 0:
+        return jsonify({'success': False, 'error': 'Could not authoritatively verify booking amount'}), 400
+
+    verified_amount = round(float(verified_amount), 2)
+    verified_type = verify_res.get('booking_type') or normalized_bt
+    ref = reference or booking_id or target_bid_for_verify
+    new_req_id = PaymentRequest.generate_request_id()
+    sig = generate_request_signature(new_req_id, target_bid_for_verify, verified_amount)
+    expires_at = datetime.utcnow() + timedelta(minutes=15)
+
+    new_pr = PaymentRequest(
+        request_id=new_req_id,
+        merchant='TravelEase',
+        booking_id=target_bid_for_verify,
+        booking_type=verified_type,
+        reference=ref,
+        version=version or '1',
+        amount=verified_amount,
+        currency='INR',
+        description=f'TravelEase {verified_type.capitalize()} Booking #{target_bid_for_verify}',
+        status='pending',
+        token_signature=sig,
+        expires_at=expires_at,
+        extra_data={'partner': 'TravelEase', 'booking_type': verified_type, 'reference': ref}
+    )
+    db.session.add(new_pr)
+    db.session.commit()
+
+    return jsonify({
+        'success': True,
+        'type': 'merchant_payment',
+        'payment_request': new_pr.to_dict()
+    })
+
+
 @bp.route('/resolve', methods=['POST'])
 @bp.route('/api/resolve', methods=['POST'])
 def api_qr_resolve():
@@ -223,23 +345,85 @@ def api_qr_resolve():
     if not raw_content:
         return jsonify({'success': False, 'error': 'Empty QR content'}), 400
 
-    # 1. Structured JSON PocketPay QR
+    # 1. Structured JSON PocketPay / TravelEase QR
     if raw_content.startswith('{') and raw_content.endswith('}'):
         try:
             payload = json.loads(raw_content)
-            if payload.get('app') == 'pocketpay' or payload.get('type'):
-                p_type = str(payload.get('type')).lower()
-                p_id = str(payload.get('id') or payload.get('ref') or '').strip()
-                if p_type == 'user':
-                    return api_qr_user(p_id)
-                elif p_type == 'pocket':
-                    return api_qr_pocket(p_id)
-                elif p_type in ('transaction', 'tx'):
-                    return api_qr_transaction(p_id)
         except Exception:
-            pass
+            return jsonify({'success': False, 'error': 'Malformed QR code'}), 400
 
-    # 2. Universal payment parser
+        if isinstance(payload, dict):
+            merchant = str(payload.get('merchant') or '').strip()
+            p_type = str(payload.get('type') or '').strip().lower()
+            version = str(payload.get('version') or '1').strip()
+            booking_id = str(payload.get('booking_id') or '').strip()
+            req_id = str(payload.get('request_id') or payload.get('id') or payload.get('ref') or '').strip()
+            booking_type = payload.get('booking_type')
+            qr_amount = payload.get('amount')
+            reference = str(payload.get('reference') or booking_id or req_id).strip()
+
+            # A. TravelEase or Merchant Payment QR
+            if p_type in ('travelease_payment', 'merchant_payment', 'payment_request', 'travelease') or merchant.lower() == 'travelease' or booking_id:
+                return _resolve_travelease_qr(
+                    merchant=merchant or 'TravelEase',
+                    booking_id=booking_id,
+                    req_id=req_id,
+                    booking_type=booking_type,
+                    version=version,
+                    qr_amount=qr_amount,
+                    reference=reference
+                )
+
+            # B. Other PocketPay structured types
+            elif p_type == 'user':
+                return api_qr_user(req_id)
+            elif p_type == 'pocket':
+                return api_qr_pocket(req_id)
+            elif p_type in ('transaction', 'tx'):
+                return api_qr_transaction(req_id)
+
+    # 2. URL parsing: TravelEase or PocketPay URLs
+    if raw_content.startswith('http://') or raw_content.startswith('https://'):
+        # Check for TravelEase booking payment URL (e.g. /booking/payment/123 or ?booking_id=123)
+        url_match = re.search(r'/booking/payment/([A-Za-z0-9_\-]+)', raw_content) or re.search(r'[?&]booking_id=([A-Za-z0-9_\-]+)', raw_content)
+        if url_match:
+            bid = url_match.group(1)
+            return _resolve_travelease_qr(booking_id=bid)
+
+        # Check for PocketPay in-app URLs
+        u_match = re.search(r'/qr/user/([A-Za-z0-9_\-@\.]+)', raw_content)
+        if u_match:
+            return api_qr_user(u_match.group(1))
+
+        p_match = re.search(r'/qr/pocket/([A-Za-z0-9_\-]+)', raw_content)
+        if p_match:
+            return api_qr_pocket(p_match.group(1))
+
+        t_match = re.search(r'/qr/tx/([A-Za-z0-9_\-]+)', raw_content)
+        if t_match:
+            return api_qr_transaction(t_match.group(1))
+
+    # 3. Direct PPR Payment Request Code
+    if raw_content.startswith('PPR'):
+        from app.models.payment_request import PaymentRequest
+        pr = PaymentRequest.query.filter_by(request_id=raw_content).first()
+        if pr:
+            if pr.is_expired():
+                return jsonify({'success': False, 'error': 'Payment request has expired'}), 400
+            if pr.status == 'paid':
+                return jsonify({'success': False, 'error': 'Payment already completed', 'already_paid': True}), 400
+            return jsonify({
+                'success': True,
+                'type': 'merchant_payment',
+                'payment_request': pr.to_dict()
+            })
+        return jsonify({'success': False, 'error': 'Payment request not found or expired'}), 404
+
+    # 4. Direct TravelEase booking ID string (e.g. TE-FL-..., TRV..., BK...)
+    if re.match(r'^(TE-[A-Z0-9\-]+|TRV[A-Z0-9_\-]+|BK[A-Z0-9_\-]+)$', raw_content, re.IGNORECASE):
+        return _resolve_travelease_qr(booking_id=raw_content)
+
+    # 5. Universal payment parser (Wallets, Pockets, Transactions, UPI VPAs)
     parsed = parse_payment_qr(raw_content)
     if parsed and parsed.get('valid'):
         p_type = parsed.get('type')
@@ -254,7 +438,6 @@ def api_qr_resolve():
             return api_qr_transaction(tx_id)
         elif p_type in ('upi', 'upi_qr', 'upi_id'):
             vpa = parsed.get('vpa') or ''
-            # If the VPA belongs to an active PocketPay user, resolve cleanly to the user
             if vpa:
                 target_user = User.query.filter(
                     (User.virtual_upi_id == vpa) |
@@ -270,4 +453,3 @@ def api_qr_resolve():
             })
 
     return jsonify({'success': False, 'error': 'Unrecognized or invalid QR code format'}), 400
-

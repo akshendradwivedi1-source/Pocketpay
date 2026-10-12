@@ -308,6 +308,90 @@ def _dispatch_async_email(app, sender_email, sender_name, recipient_list, subjec
         logger.info(f"ℹ [SIMULATED] Email '{subject}' dispatched to {masked_recipients} (No external email API key configured).")
 
 
+def send_email_sync(subject, recipients, body=None, html=None):
+    """
+    Synchronously dispatches email and validates that the email provider (SMTP / HTTP API)
+    has authoritatively accepted the message for delivery.
+    Returns (True, reason) or (False, error_reason).
+    """
+    try:
+        app = current_app._get_current_object()
+        raw_sender = (app.config.get('MAIL_DEFAULT_SENDER') or app.config.get('MAIL_USERNAME') or 'noreply@pocketpay.app').strip()
+        clean_sender_email = _extract_clean_email(raw_sender) or 'noreply@pocketpay.app'
+        sender_name = 'PocketPay'
+
+        recipient_list = recipients if isinstance(recipients, list) else [recipients]
+        if app.config.get('TESTING') or app.config.get('MAIL_SUPPRESS_SEND'):
+            return True, "Suppressed in test environment"
+
+        provider = (app.config.get('EMAIL_PROVIDER') or 'auto').lower()
+
+        # 1. Resend
+        if provider == 'resend' or (provider == 'auto' and app.config.get('RESEND_API_KEY')):
+            try:
+                ok, reason = _send_via_resend(app, clean_sender_email, sender_name, recipient_list, subject, body, html)
+                if ok:
+                    return True, reason
+            except Exception as e:
+                logger.warning(f"Resend error: {e}")
+
+        # 2. Brevo
+        if provider in ('brevo', 'sendinblue') or (provider == 'auto' and app.config.get('BREVO_API_KEY')):
+            try:
+                ok, reason = _send_via_brevo(app, clean_sender_email, sender_name, recipient_list, subject, body, html)
+                if ok:
+                    return True, reason
+            except Exception as e:
+                logger.warning(f"Brevo error: {e}")
+
+        # 3. SendGrid
+        if provider == 'sendgrid' or (provider == 'auto' and app.config.get('SENDGRID_API_KEY')):
+            try:
+                ok, reason = _send_via_sendgrid(app, clean_sender_email, sender_name, recipient_list, subject, body, html)
+                if ok:
+                    return True, reason
+            except Exception as e:
+                logger.warning(f"SendGrid error: {e}")
+
+        # 4. Mailgun
+        if provider == 'mailgun' or (provider == 'auto' and app.config.get('MAILGUN_API_KEY') and app.config.get('MAILGUN_DOMAIN')):
+            try:
+                ok, reason = _send_via_mailgun(app, clean_sender_email, sender_name, recipient_list, subject, body, html)
+                if ok:
+                    return True, reason
+            except Exception as e:
+                logger.warning(f"Mailgun error: {e}")
+
+        # 5. SMTP (Flask-Mail)
+        if provider in ('smtp', 'auto') and app.config.get('MAIL_USERNAME'):
+            try:
+                msg = Message(
+                    subject=subject,
+                    recipients=recipient_list,
+                    sender=(sender_name, clean_sender_email),
+                    body=body,
+                    html=html
+                )
+                ok, reason = _send_via_smtp(app, msg)
+                if ok:
+                    return True, reason
+                return False, f"SMTP delivery failed: {reason}"
+            except Exception as e:
+                clean_err = str(e)
+                logger.error(f"SMTP delivery error: {type(e).__name__} - {clean_err}")
+                return False, f"Email delivery failed: {type(e).__name__}"
+
+        return False, "No active email delivery provider configured"
+    except Exception as e:
+        logger.error(f"send_email_sync error: {type(e).__name__} - {str(e)}")
+        return False, str(e)
+
+
+def send_otp_email_sync(recipient_email, otp, user_name="User", purpose="verification"):
+    """Synchronous OTP sender with provider acceptance confirmation."""
+    return send_otp_email(recipient_email, otp, user_name=user_name, purpose=purpose, sync=True)
+
+
 def send_email_async(subject, recipients, body=None, html=None):
     """
     Unified transactional asynchronous email dispatcher.
@@ -450,9 +534,10 @@ Notice: The actual OTP verification code is NOT included in this notification. I
         return False
 
 
-def send_otp_email(recipient_email, otp, user_name="User", purpose="verification"):
+def send_otp_email(recipient_email, otp, user_name="User", purpose="verification", sync=False):
     """
     Sends the real 6-digit OTP exclusively to the user's email address.
+    If sync=True, waits for provider delivery confirmation and returns (success, reason).
     """
     try:
         logger.info(f"Preparing {purpose} OTP email for user {_mask_email(recipient_email)}...")
@@ -500,10 +585,14 @@ The PocketPay Team
           </div>
         </div>
         """
+        if sync:
+            return send_email_sync(subject, recipient_email, body=body, html=html)
         user_email_success = send_email_async(subject, recipient_email, body=body, html=html)
         return user_email_success
     except Exception as e:
         logger.error(f"Error in send_otp_email for {_mask_email(recipient_email)}: {type(e).__name__} - {str(e)}")
+        if sync:
+            return False, f"Email dispatch failed: {type(e).__name__}"
         return False
 
 

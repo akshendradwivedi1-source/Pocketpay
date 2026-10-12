@@ -26,34 +26,38 @@ def ensure_admin_user_exists():
     for email in admin_emails:
         if not email:
             continue
-        admin_user = User.query.filter_by(email=email).first()
-        if not admin_user:
-            admin_user = User(
-                email=email,
-                full_name='Akshendra Dwivedi' if 'akshendra' in email else 'PocketPay Administrator',
-                phone='+91 8010906123' if 'akshendra' in email else None,
-                is_admin=True,
-                email_verified=True,
-                phone_verified=True,
-                is_active=True,
-                is_premium=True,
-                wallet_balance=50000.0 if 'akshendra' in email else 25000.0
-            )
-            admin_user.set_password(admin_pass)
-            admin_user.set_transaction_pin('1234')
-            admin_user.generate_virtual_ids()
-            db.session.add(admin_user)
-            db.session.commit()
-            print(f"[Seed] Admin account provisioned: {email}")
-        else:
-            admin_user.is_admin = True
-            admin_user.is_active = True
-            admin_user.email_verified = True
-            if not admin_user.transaction_pin_hash:
-                admin_user.set_transaction_pin('1234')
-            if not admin_user.password_hash:
+        try:
+            admin_user = User.query.filter_by(email=email).first()
+            if not admin_user:
+                admin_user = User(
+                    email=email,
+                    full_name='Akshendra Dwivedi' if 'akshendra' in email else 'PocketPay Administrator',
+                    phone='+91 8010906123' if 'akshendra' in email else None,
+                    is_admin=True,
+                    email_verified=True,
+                    phone_verified=True,
+                    is_active=True,
+                    is_premium=True,
+                    wallet_balance=50000.0 if 'akshendra' in email else 25000.0
+                )
                 admin_user.set_password(admin_pass)
-            db.session.commit()
+                admin_user.set_transaction_pin('1234')
+                admin_user.generate_virtual_ids()
+                db.session.add(admin_user)
+                db.session.commit()
+                print(f"[Seed] Admin account provisioned: {email}")
+            else:
+                admin_user.is_admin = True
+                admin_user.is_active = True
+                admin_user.email_verified = True
+                if not admin_user.transaction_pin_hash:
+                    admin_user.set_transaction_pin('1234')
+                if not admin_user.password_hash:
+                    admin_user.set_password(admin_pass)
+                db.session.commit()
+        except Exception as err:
+            db.session.rollback()
+            print(f"[Seed] Notice provisioning admin ({email}): {err}")
 
 
 
@@ -63,104 +67,116 @@ def ensure_demo_accounts_exist():
 
     # 1. Free Demo User
     free_email = 'demo.free@pocketpay.test'
-    free_user = User.query.filter_by(email=free_email).first()
-    if not free_user:
-        free_user = User(
-            email=free_email,
-            phone='+91 91111 22222',
-            full_name='Demo Free User',
-            wallet_balance=5000.00,
-            email_verified=True,
-            phone_verified=True,
-            theme_preference='dark',
-            is_premium=False,
-            is_active=True
-        )
-        free_user.set_password('DemoFree@123')
-        free_user.set_transaction_pin('1234')
-        free_user.generate_virtual_ids()
-        db.session.add(free_user)
-        db.session.flush()
+    try:
+        free_user = User.query.filter_by(email=free_email).first()
+        if not free_user:
+            free_user = User(
+                email=free_email,
+                phone='+91 91111 22222',
+                full_name='Demo Free User',
+                wallet_balance=5000.00,
+                email_verified=True,
+                phone_verified=True,
+                theme_preference='dark',
+                is_premium=False,
+                is_active=True
+            )
+            free_user.set_password('DemoFree@123')
+            free_user.set_transaction_pin('1234')
+            free_user.generate_virtual_ids()
+            db.session.add(free_user)
+            db.session.flush()
 
-        # Add starter pockets
-        p1 = Pocket(user_id=free_user.id, name='Daily Expenses', color='#6366f1', icon='shopping-bag', current_balance=2500.0, budget_amount=5000.0, monthly_limit=5000.0)
-        p2 = Pocket(user_id=free_user.id, name='Savings', color='#22c55e', icon='piggy-bank', current_balance=1500.0, budget_amount=10000.0, monthly_limit=2000.0)
-        db.session.add_all([p1, p2])
+            # Add starter pockets
+            p1 = Pocket(user_id=free_user.id, name='Daily Expenses', color='#6366f1', icon='shopping-bag', current_balance=2500.0, budget_amount=5000.0, monthly_limit=5000.0)
+            p2 = Pocket(user_id=free_user.id, name='Savings', color='#22c55e', icon='piggy-bank', current_balance=1500.0, budget_amount=10000.0, monthly_limit=2000.0)
+            db.session.add_all([p1, p2])
 
-        # Add goal
-        g1 = SavingsGoal(user_id=free_user.id, name='Emergency Fund', target_amount=20000.0, current_amount=1500.0, category='Emergency Fund')
-        db.session.add(g1)
-        db.session.commit()
-        print('[Seed] Free Demo account provisioned: demo.free@pocketpay.test (DemoFree@123)')
+            # Add goal
+            g1 = SavingsGoal(user_id=free_user.id, name='Emergency Fund', target_amount=20000.0, current_amount=1500.0, category='Emergency Fund')
+            db.session.add(g1)
+            db.session.commit()
+            print('[Seed] Free Demo account provisioned: demo.free@pocketpay.test (DemoFree@123)')
+    except Exception as err:
+        db.session.rollback()
+        print(f"[Seed] Notice provisioning free demo account: {err}")
 
     # 2. Premium Demo User
     prem_email = 'demo.premium@pocketpay.test'
-    prem_user = User.query.filter_by(email=prem_email).first()
-    if not prem_user:
-        prem_user = User(
-            email=prem_email,
-            phone='+91 99999 88888',
-            full_name='Demo Premium User',
-            wallet_balance=150000.00,
-            email_verified=True,
-            phone_verified=True,
-            theme_preference='dark',
-            is_premium=True,
-            is_active=True
-        )
-        prem_user.set_password('DemoPremium@123')
-        prem_user.set_transaction_pin('1234')
-        prem_user.generate_virtual_ids()
-        db.session.add(prem_user)
-        db.session.flush()
+    try:
+        prem_user = User.query.filter_by(email=prem_email).first()
+        if not prem_user:
+            prem_user = User(
+                email=prem_email,
+                phone='+91 99999 88888',
+                full_name='Demo Premium User',
+                wallet_balance=150000.00,
+                email_verified=True,
+                phone_verified=True,
+                theme_preference='dark',
+                is_premium=True,
+                is_active=True
+            )
+            prem_user.set_password('DemoPremium@123')
+            prem_user.set_transaction_pin('1234')
+            prem_user.generate_virtual_ids()
+            db.session.add(prem_user)
+            db.session.flush()
 
-        # Add premium pockets
-        p1 = Pocket(user_id=prem_user.id, name='Wealth & Stocks', color='#8b5cf6', icon='line-chart', current_balance=75000.0, budget_amount=200000.0, monthly_limit=25000.0)
-        p2 = Pocket(user_id=prem_user.id, name='Luxury Travel', color='#06b6d4', icon='plane', current_balance=45000.0, budget_amount=100000.0, monthly_limit=15000.0)
-        p3 = Pocket(user_id=prem_user.id, name='Lifestyle & Dining', color='#f43f5e', icon='utensils', current_balance=15000.0, budget_amount=30000.0, monthly_limit=20000.0)
-        db.session.add_all([p1, p2, p3])
+            # Add premium pockets
+            p1 = Pocket(user_id=prem_user.id, name='Wealth & Stocks', color='#8b5cf6', icon='line-chart', current_balance=75000.0, budget_amount=200000.0, monthly_limit=25000.0)
+            p2 = Pocket(user_id=prem_user.id, name='Luxury Travel', color='#06b6d4', icon='plane', current_balance=45000.0, budget_amount=100000.0, monthly_limit=15000.0)
+            p3 = Pocket(user_id=prem_user.id, name='Lifestyle & Dining', color='#f43f5e', icon='utensils', current_balance=15000.0, budget_amount=30000.0, monthly_limit=2000.0)
+            db.session.add_all([p1, p2, p3])
 
-        # Add goals
-        g1 = SavingsGoal(user_id=prem_user.id, name='MacBook Pro M3 Max', target_amount=250000.0, current_amount=120000.0, category='Tech & Gadgets')
-        g2 = SavingsGoal(user_id=prem_user.id, name='Japan Ski Trip', target_amount=180000.0, current_amount=85000.0, category='Travel & Vacation')
-        db.session.add_all([g1, g2])
-        db.session.commit()
-        print('[Seed] Premium Demo account provisioned: demo.premium@pocketpay.test (DemoPremium@123)')
+            # Add goals
+            g1 = SavingsGoal(user_id=prem_user.id, name='MacBook Pro M3 Max', target_amount=250000.0, current_amount=120000.0, category='Tech & Gadgets')
+            g2 = SavingsGoal(user_id=prem_user.id, name='Japan Ski Trip', target_amount=180000.0, current_amount=85000.0, category='Travel & Vacation')
+            db.session.add_all([g1, g2])
+            db.session.commit()
+            print('[Seed] Premium Demo account provisioned: demo.premium@pocketpay.test (DemoPremium@123)')
+    except Exception as err:
+        db.session.rollback()
+        print(f"[Seed] Notice provisioning premium demo account: {err}")
 
     # 3. Standard Demo User: demo@pocketpay.app (Demo@123)
     main_demo_email = 'demo@pocketpay.app'
-    main_demo = User.query.filter_by(email=main_demo_email).first()
-    if not main_demo:
-        main_demo = User(
-            email=main_demo_email,
-            phone='+91 98765 43210',
-            full_name='Demo User',
-            wallet_balance=25000.00,
-            email_verified=True,
-            phone_verified=True,
-            theme_preference='dark',
-            is_premium=True,
-            is_active=True
-        )
-        main_demo.set_password('Demo@123')
-        main_demo.set_transaction_pin('1234')
-        main_demo.generate_virtual_ids()
-        db.session.add(main_demo)
-        db.session.flush()
-
-        p1 = Pocket(user_id=main_demo.id, name='Daily Expenses', color='#6366f1', icon='shopping-bag', current_balance=0.0, budget_amount=5000.0, monthly_limit=5000.0)
-        p2 = Pocket(user_id=main_demo.id, name='Savings', color='#22c55e', icon='piggy-bank', current_balance=0.0, budget_amount=15000.0, monthly_limit=5000.0)
-        db.session.add_all([p1, p2])
-        db.session.commit()
-        print('[Seed] Standard Demo account provisioned: demo@pocketpay.app (Demo@123)')
-    else:
-        main_demo.is_active = True
-        main_demo.email_verified = True
-        if not main_demo.password_hash:
+    try:
+        main_demo = User.query.filter_by(email=main_demo_email).first()
+        if not main_demo:
+            main_demo = User(
+                email=main_demo_email,
+                phone='+91 98765 43210',
+                full_name='Demo User',
+                wallet_balance=25000.00,
+                email_verified=True,
+                phone_verified=True,
+                theme_preference='dark',
+                is_premium=True,
+                is_active=True
+            )
             main_demo.set_password('Demo@123')
-        if not main_demo.transaction_pin_hash:
             main_demo.set_transaction_pin('1234')
-        db.session.commit()
+            main_demo.generate_virtual_ids()
+            db.session.add(main_demo)
+            db.session.flush()
+
+            p1 = Pocket(user_id=main_demo.id, name='Daily Expenses', color='#6366f1', icon='shopping-bag', current_balance=0.0, budget_amount=5000.0, monthly_limit=5000.0)
+            p2 = Pocket(user_id=main_demo.id, name='Savings', color='#22c55e', icon='piggy-bank', current_balance=0.0, budget_amount=15000.0, monthly_limit=5000.0)
+            db.session.add_all([p1, p2])
+            db.session.commit()
+            print('[Seed] Standard Demo account provisioned: demo@pocketpay.app (Demo@123)')
+        else:
+            main_demo.is_active = True
+            main_demo.email_verified = True
+            if not main_demo.password_hash:
+                main_demo.set_password('Demo@123')
+            if not main_demo.transaction_pin_hash:
+                main_demo.set_transaction_pin('1234')
+            db.session.commit()
+    except Exception as err:
+        db.session.rollback()
+        print(f"[Seed] Notice provisioning standard demo account: {err}")
 
 
 def seed_database_if_empty():

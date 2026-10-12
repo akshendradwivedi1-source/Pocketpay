@@ -225,7 +225,9 @@ def build_qr_wallet_url(user, req=None):
 
 
 def build_qr_user_url(user, req=None):
-    return build_qr_wallet_url(user, req)
+    base = get_public_base_url(req)
+    wallet_id = getattr(user, 'virtual_wallet_id', None) or f"PPW{getattr(user, 'id', '001')}"
+    return f"{base}/qr/user/{wallet_id}"
 
 
 def build_qr_pocket_url(pocket, req=None):

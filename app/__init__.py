@@ -6,18 +6,22 @@ from .extensions import db, login_manager, migrate, mail, cors
 
 def create_app(config_name=None):
     if config_name is None:
-        config_name = os.environ.get('FLASK_ENV', 'default')
+        config_name = os.environ.get('FLASK_ENV') or ('production' if os.environ.get('RENDER') else 'default')
     
     app = Flask(__name__, 
                 template_folder=os.path.join(os.path.dirname(__file__), 'templates'),
                 static_folder=os.path.join(os.path.dirname(__file__), 'static'))
-    app.config.from_object(config[config_name])
+    
+    # Safe config resolution with graceful fallback
+    cfg_class = config.get(config_name, config.get('production' if os.environ.get('RENDER') else 'default'))
+    app.config.from_object(cfg_class)
     
     os.makedirs(app.instance_path, exist_ok=True)
     
     db.init_app(app)
     login_manager.init_app(app)
-    migrate.init_app(app, db)
+    migrations_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'migrations')
+    migrate.init_app(app, db, directory=migrations_dir)
     mail.init_app(app)
     cors.init_app(app, resources={r"/api/*": {"origins": "*"}})
     
@@ -67,6 +71,13 @@ def create_app(config_name=None):
     app.register_blueprint(premium_bp, url_prefix='/api/premium')
     app.register_blueprint(premium_bp, url_prefix='/premium', name='premium_alias')
 
+    from app.blueprints.partner_payments import bp as partner_payments_bp
+    app.register_blueprint(partner_payments_bp, url_prefix='/api/v1/payments')
+    app.register_blueprint(partner_payments_bp, url_prefix='/partner', name='partner_payments_alias')
+    app.config.setdefault('POCKETPAY_PARTNER_API_KEY', os.environ.get('POCKETPAY_PARTNER_API_KEY', 'travelease_service_key_live_99812'))
+    app.config.setdefault('TRAVELEASE_API_URL', os.environ.get('TRAVELEASE_API_URL', 'http://127.0.0.1:5000'))
+    app.config.setdefault('TRAVELEASE_API_KEY', os.environ.get('TRAVELEASE_API_KEY', 'travelease_service_key_live_99812'))
+
     # =========================================================================
     # GLOBAL API ERROR HANDLERS (Guarantees JSON responses for API/Auth routes)
     # =========================================================================
@@ -75,6 +86,7 @@ def create_app(config_name=None):
     def is_api_request():
         return (
             request.path.startswith('/api/') or
+            request.path.startswith('/partner/') or
             request.path.startswith('/premium/') or
             request.path.startswith('/auth/') or
             request.path.startswith('/admin/api/') or
@@ -128,7 +140,10 @@ def create_app(config_name=None):
     
     with app.app_context():
         from sqlalchemy import inspect, text
-        db.create_all()
+        try:
+            db.create_all()
+        except Exception as e:
+            app.logger.warning(f"[DB Init] db.create_all notice: {e}")
 
         # 1. Run Alembic migrations automatically on startup (skip in testing mode)
         if config_name != 'testing':
@@ -270,12 +285,36 @@ def create_app(config_name=None):
                     tx_alter.append("ALTER TABLE transactions ADD COLUMN destination_id VARCHAR(64)")
                 if 'reference_id' not in tx_columns:
                     tx_alter.append("ALTER TABLE transactions ADD COLUMN reference_id VARCHAR(128)")
+                if 'booking_type' not in tx_columns:
+                    tx_alter.append("ALTER TABLE transactions ADD COLUMN booking_type VARCHAR(50)")
+                if 'external_booking_id' not in tx_columns:
+                    tx_alter.append("ALTER TABLE transactions ADD COLUMN external_booking_id VARCHAR(100)")
+                if 'external_reference' not in tx_columns:
+                    tx_alter.append("ALTER TABLE transactions ADD COLUMN external_reference VARCHAR(100)")
+                if 'external_payment_status' not in tx_columns:
+                    tx_alter.append("ALTER TABLE transactions ADD COLUMN external_payment_status VARCHAR(50)")
                 if 'failure_reason' not in tx_columns:
                     tx_alter.append("ALTER TABLE transactions ADD COLUMN failure_reason VARCHAR(255)")
                 if is_postgres and 'qr_code_url' in tx_columns:
                     tx_alter.append("ALTER TABLE transactions ALTER COLUMN qr_code_url TYPE TEXT")
 
                 for stmt in tx_alter:
+                    try:
+                        with db.engine.begin() as conn:
+                            conn.execute(text(stmt))
+                    except Exception:
+                        pass
+
+            if 'payment_requests' in tables:
+                pr_columns = [c['name'] for c in inspector.get_columns('payment_requests')]
+                pr_alter = []
+                if 'booking_type' not in pr_columns:
+                    pr_alter.append("ALTER TABLE payment_requests ADD COLUMN booking_type VARCHAR(50)")
+                if 'reference' not in pr_columns:
+                    pr_alter.append("ALTER TABLE payment_requests ADD COLUMN reference VARCHAR(100)")
+                if 'version' not in pr_columns:
+                    pr_alter.append("ALTER TABLE payment_requests ADD COLUMN version VARCHAR(20) DEFAULT '1'")
+                for stmt in pr_alter:
                     try:
                         with db.engine.begin() as conn:
                             conn.execute(text(stmt))
@@ -305,8 +344,11 @@ def create_app(config_name=None):
             app.logger.debug(f"[Schema Sync Exception] {e}")
 
         if config_name != 'testing':
-            from app.seeds import seed_database_if_empty
-            seed_database_if_empty()
+            try:
+                from app.seeds import seed_database_if_empty
+                seed_database_if_empty()
+            except Exception as e:
+                app.logger.warning(f"[DB Seed] Notice during seed check: {e}")
 
             # Non-blocking Telegram webhook synchronization on production startup
             if os.environ.get('TELEGRAM_WEBHOOK_URL') or os.environ.get('RENDER_EXTERNAL_URL'):
@@ -319,6 +361,19 @@ def create_app(config_name=None):
     return app
 
 
-# WSGI application instance export for 'gunicorn app:app'
-app = create_app()
+# Lazy WSGI application export for 'gunicorn app:app' (avoids eager startup on import)
+_app_instance = None
+
+
+def get_app():
+    global _app_instance
+    if _app_instance is None:
+        _app_instance = create_app()
+    return _app_instance
+
+
+def __getattr__(name):
+    if name == 'app':
+        return get_app()
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 

@@ -17,10 +17,10 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="/static/css/app.css" />
-<link rel="stylesheet" href="/static/css/animations.css" />
-<link rel="stylesheet" href="/static/css/charts.css" />
-<link rel="stylesheet" href="/static/css/assistant.css" />
+<link rel="stylesheet" href="/static/css/app.css?v=2.1.0" />
+<link rel="stylesheet" href="/static/css/animations.css?v=2.1.0" />
+<link rel="stylesheet" href="/static/css/charts.css?v=2.1.0" />
+<link rel="stylesheet" href="/static/css/assistant.css?v=2.1.0" />
 </head>
 <body>
 
@@ -187,18 +187,7 @@
     </main>
   </div>
 
-  <div class="mobile-fab-bar">
-    <button class="fab-main" id="mobileFab">
-      <i data-lucide="plus"></i>
-    </button>
-  </div>
-  <div class="mobile-fab-menu" id="mobileFabMenu">
-    <button class="fab-item" data-action="scan"><i data-lucide="scan"></i><span>Scan QR</span></button>
-    <button class="fab-item" data-action="income"><i data-lucide="arrow-down-left"></i><span>Income</span></button>
-    <button class="fab-item" data-action="expense"><i data-lucide="arrow-up-right"></i><span>Pay</span></button>
-    <button class="fab-item" data-action="transfer"><i data-lucide="refresh-ccw"></i><span>Transfer</span></button>
-    <button class="fab-item" data-action="pocket"><i data-lucide="folder-plus"></i><span>Pocket</span></button>
-  </div>
+  
 
   <nav class="bottom-nav">
     <a href="#" data-route="dashboard" class="bottom-item active"><i data-lucide="layout-dashboard"></i><span>Home</span></a>
@@ -222,18 +211,41 @@
   </div>
 </div>
 
-<script src="/static/js/lucide.min.js"></script>
-<script src="/static/js/app.js"></script>
-<script src="/static/js/api.js"></script>
-<script src="/static/js/ui.js"></script>
-<script src="/static/js/views/dashboard.js"></script>
-<script src="/static/js/views/pockets.js"></script>
-<script src="/static/js/views/transactions.js"></script>
-<script src="/static/js/views/analytics.js"></script>
-<script src="/static/js/views/wallet.js"></script>
-<script src="/static/js/views/premium.js"></script>
-<script src="/static/js/views/modals.js"></script>
-<script src="/static/js/assistant.js"></script>
-<script src="/static/js/init.js"></script>
+<script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+<script src="/static/js/lucide.min.js?v=2.1.0"></script>
+<script src="/static/js/jsqr.min.js?v=2.1.0"></script>
+<script src="/static/js/app.js?v=2.1.0"></script>
+<script src="/static/js/api.js?v=2.1.0"></script>
+<script src="/static/js/ui.js?v=2.1.0"></script>
+<script src="/static/js/views/dashboard.js?v=2.1.0"></script>
+<script src="/static/js/views/pockets.js?v=2.1.0"></script>
+<script src="/static/js/views/transactions.js?v=2.1.0"></script>
+<script src="/static/js/views/analytics.js?v=2.1.0"></script>
+<script src="/static/js/views/wallet.js?v=2.1.0"></script>
+<script src="/static/js/views/premium.js?v=2.1.0"></script>
+<script src="/static/js/views/modals.js?v=2.1.0"></script>
+<script src="/static/js/assistant.js?v=2.1.0"></script>
+<script src="/static/js/init.js?v=2.1.0"></script>
+<script>
+(function() {
+  setTimeout(function() {
+    var loader = document.getElementById('appLoader');
+    if (loader && !loader.classList.contains('loaded')) {
+      console.warn('[Watchdog Failsafe] Forcefully dismissing loader to unblock UI');
+      loader.classList.add('loaded');
+      setTimeout(function() { loader.style.display = 'none'; }, 400);
+      var app = document.getElementById('app');
+      if (app) app.classList.remove('hidden');
+      if (window.PP) {
+        if (!window.PP.state?.user && window.PP.renderAuth) {
+          window.PP.renderAuth();
+        } else if (window.PP.renderView) {
+          window.PP.renderView();
+        }
+      }
+    }
+  }, 3500);
+})();
+</script>
 </body>
 </html>

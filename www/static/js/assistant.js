@@ -4,7 +4,7 @@ window.PP = window.PP || {};
 PP.Assistant = {
   isOpen: false,
   messages: [],
-  
+
   // Knowledge base and contextual prompts per route
   contextPrompts: {
     dashboard: [
@@ -169,118 +169,109 @@ PP.Assistant = {
     this.renderWidget();
     this.attachEventListeners();
     this.updateContextPrompts();
-    
+
     // Auto-update prompts when route changes
     PP.on('route:change', () => this.updateContextPrompts());
     PP.on('view:rendered', () => this.updateContextPrompts());
   },
 
   renderWidget() {
-    // Remove any existing assistant widget
-    const existing = document.getElementById('ppAssistantWidget');
-    if (existing) existing.remove();
+    // Remove any existing assistant elements (prevent duplicates)
+    ['ppAssistantWidget', 'assistantLauncher', 'assistantWindow'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.remove();
+    });
 
-    const widget = PP.el('div', { id: 'ppAssistantWidget', class: 'assistant-widget' }, [
-      // Floating launcher button
-      PP.el('button', {
-        id: 'assistantLauncher',
-        class: 'assistant-launcher glow-pulse',
-        'aria-label': 'PocketPay AI Assistant',
-        title: 'Need help? Ask PocketPay Assistant',
-        onclick: () => this.toggle(),
-      }, [
-        PP.el('div', { class: 'launcher-icon' }, [
-          PP.el('i', { 'data-lucide': 'sparkles' }),
-        ]),
-        PP.el('span', { class: 'launcher-text hidden-xs' }, ['PocketPay Assistant']),
-        PP.el('span', { class: 'launcher-badge' }, ['AI']),
-      ]),
-
-      // Chat Window
-      PP.el('div', { id: 'assistantWindow', class: 'assistant-window glass-card' }, [
-        // Header
-        PP.el('div', { class: 'assistant-header' }, [
-          PP.el('div', { class: 'assistant-brand' }, [
-            PP.el('div', { class: 'assistant-avatar' }, [
-              PP.el('i', { 'data-lucide': 'bot' }),
-            ]),
-            PP.el('div', {}, [
-              PP.el('h4', {}, ['PocketPay Assistant']),
-              PP.el('div', { class: 'assistant-status' }, [
-                PP.el('span', { class: 'status-dot' }),
-                PP.el('span', { id: 'assistantContextLabel' }, ['Context: Dashboard']),
-              ]),
-            ]),
-          ]),
-          PP.el('div', { class: 'assistant-header-actions' }, [
-            PP.el('button', {
-              class: 'btn-icon',
-              title: 'Clear Chat',
-              onclick: () => this.clearChat(),
-            }, [PP.el('i', { 'data-lucide': 'rotate-ccw', style: 'width:15px;height:15px' })]),
-            PP.el('button', {
-              class: 'btn-icon',
-              title: 'Close Assistant',
-              onclick: () => this.close(),
-            }, [PP.el('i', { 'data-lucide': 'x', style: 'width:18px;height:18px' })]),
-          ]),
-        ]),
-
-        // Quick Context Chips
-        PP.el('div', { class: 'assistant-chips-container' }, [
-          PP.el('div', { class: 'assistant-chips-title' }, [
-            PP.el('i', { 'data-lucide': 'lightbulb', style: 'width:12px;height:12px' }),
-            'Suggested for this page:',
-          ]),
-          PP.el('div', { id: 'assistantChipsList', class: 'assistant-chips-list' }),
-        ]),
-
-        // Messages scroll area
-        PP.el('div', { id: 'assistantMessages', class: 'assistant-messages' }),
-
-        // Guardrail safety notice
-        PP.el('div', { class: 'assistant-guardrail-notice' }, [
-          PP.el('i', { 'data-lucide': 'shield-check', style: 'width:12px;height:12px' }),
-          'Informational assistant. Credentials and financial actions are strictly protected.',
-        ]),
-
-        // Input Footer
-        PP.el('form', {
-          id: 'assistantForm',
-          class: 'assistant-form',
-          onsubmit: (e) => {
-            e.preventDefault();
-            this.handleUserSubmit();
-          },
-        }, [
-          PP.el('input', {
-            id: 'assistantInput',
-            type: 'text',
-            class: 'assistant-input',
-            placeholder: 'Ask anything about PocketPay…',
-            autocomplete: 'off',
-          }),
-          PP.el('button', {
-            type: 'submit',
-            class: 'assistant-send-btn',
-            'aria-label': 'Send Message',
-          }, [
-            PP.el('i', { 'data-lucide': 'send', style: 'width:16px;height:16px' }),
-          ]),
-        ]),
-      ]),
+    // --- Floating Launcher Button (circular ball) ---
+    const launcher = PP.el('button', {
+      id: 'assistantLauncher',
+      class: 'assistant-launcher',
+      'aria-label': 'Open PocketPay Assistant',
+      title: 'Need help? Ask PocketPay Assistant',
+      onclick: () => this.toggle(),
+    }, [
+      PP.el('i', { 'data-lucide': 'sparkles' })
     ]);
 
-    document.body.appendChild(widget);
+    // --- Chat Window (initially hidden) ---
+    const chatWindow = PP.el('div', { id: 'assistantWindow', class: 'assistant-window' }, [
+      // Header
+      PP.el('div', { class: 'assistant-header' }, [
+        PP.el('div', { class: 'assistant-brand' }, [
+          PP.el('div', { class: 'assistant-avatar' }, [
+            PP.el('i', { 'data-lucide': 'bot' })
+          ]),
+          PP.el('div', {}, [
+            PP.el('h4', {}, ['PocketPay Assistant']),
+            PP.el('div', { class: 'assistant-status' }, [
+              PP.el('span', { class: 'status-dot' }),
+              PP.el('span', { id: 'assistantContextLabel' }, ['Context: Dashboard'])
+            ])
+          ])
+        ]),
+        PP.el('div', { class: 'assistant-header-actions' }, [
+          PP.el('button', {
+            class: 'btn-icon',
+            title: 'Clear Chat',
+            onclick: () => this.clearChat(),
+          }, [PP.el('i', { 'data-lucide': 'rotate-ccw', style: 'width:15px;height:15px' })]),
+          PP.el('button', {
+            class: 'btn-icon',
+            title: 'Close Assistant',
+            onclick: () => this.close(),
+          }, [PP.el('i', { 'data-lucide': 'x', style: 'width:18px;height:18px' })])
+        ])
+      ]),
+      // Quick Context Chips
+      PP.el('div', { class: 'assistant-chips-container' }, [
+        PP.el('div', { class: 'assistant-chips-title' }, [
+          PP.el('i', { 'data-lucide': 'lightbulb', style: 'width:12px;height:12px' }),
+          'Suggested for this page:'
+        ]),
+        PP.el('div', { id: 'assistantChipsList', class: 'assistant-chips-list' })
+      ]),
+      // Messages area
+      PP.el('div', { id: 'assistantMessages', class: 'assistant-messages' }),
+      // Guardrail notice
+      PP.el('div', { class: 'assistant-guardrail-notice' }, [
+        PP.el('i', { 'data-lucide': 'shield-check', style: 'width:12px;height:12px' }),
+        'Informational assistant. Credentials and financial actions are strictly protected.'
+      ]),
+      // Input Footer
+      PP.el('form', {
+        id: 'assistantForm',
+        class: 'assistant-form',
+        onsubmit: (e) => { e.preventDefault(); this.handleUserSubmit(); }
+      }, [
+        PP.el('input', {
+          id: 'assistantInput',
+          type: 'text',
+          class: 'assistant-input',
+          placeholder: 'Ask anything about PocketPay\u2026',
+          autocomplete: 'off'
+        }),
+        PP.el('button', {
+          type: 'submit',
+          class: 'assistant-send-btn',
+          'aria-label': 'Send Message'
+        }, [
+          PP.el('i', { 'data-lucide': 'send', style: 'width:16px;height:16px' })
+        ])
+      ])
+    ]);
+
+    // Append both directly to body so they are always visible
+    document.body.appendChild(launcher);
+    document.body.appendChild(chatWindow);
     PP.refreshIcons();
   },
 
   attachEventListeners() {
-    // Close when clicking outside on mobile
+    // Close when clicking outside the chat window on desktop
     document.addEventListener('click', (e) => {
-      const widget = document.getElementById('ppAssistantWidget');
-      if (this.isOpen && widget && !widget.contains(e.target)) {
-        // Only auto-close on smaller screens
+      const win = document.getElementById('assistantWindow');
+      const launcher = document.getElementById('assistantLauncher');
+      if (this.isOpen && win && launcher && !win.contains(e.target) && !launcher.contains(e.target)) {
         if (window.innerWidth < 768) {
           this.close();
         }
@@ -290,7 +281,7 @@ PP.Assistant = {
     // Send initial greeting if empty
     if (this.messages.length === 0) {
       this.addAssistantMessage({
-        text: '👋 Hi there! I\'m your <b>PocketPay Assistant</b>. I can help explain features, guide you through organizing pockets, adding income, making payments, and navigating the app.<br><br>What would you like to know?',
+        text: '\ud83d\udc4b Hi there! I\'m your <b>PocketPay Assistant</b>. I can help explain features, guide you through organizing pockets, adding income, making payments, and navigating the app.<br><br>What would you like to know?',
         title: 'Welcome to PocketPay!',
       });
     }
@@ -308,7 +299,7 @@ PP.Assistant = {
     if (win) win.classList.add('open');
     if (launcher) launcher.classList.add('active');
     this.updateContextPrompts();
-    
+
     // Focus input after opening
     setTimeout(() => {
       const inp = document.getElementById('assistantInput');
@@ -328,7 +319,7 @@ PP.Assistant = {
     const route = PP.state.currentRoute || 'dashboard';
     const chipsList = document.getElementById('assistantChipsList');
     const contextLabel = document.getElementById('assistantContextLabel');
-    
+
     if (contextLabel) {
       const formatted = route.charAt(0).toUpperCase() + route.slice(1).replace('-', ' ');
       contextLabel.textContent = `Context: ${formatted}`;
@@ -353,6 +344,7 @@ PP.Assistant = {
   },
 
   askQuestion(query) {
+    if (!this.isOpen) this.open();
     const inp = document.getElementById('assistantInput');
     if (inp) inp.value = query;
     this.handleUserSubmit();
@@ -431,7 +423,10 @@ PP.Assistant = {
 
     // Show typing indicator
     const container = document.getElementById('assistantMessages');
-    const typingEl = PP.el('div', { class: 'assistant-msg assistant-typing', style: 'display:flex;align-items:center;gap:0.5rem;padding:0.75rem 1rem;color:var(--text-muted);font-size:0.85rem' }, [
+    const typingEl = PP.el('div', {
+      class: 'assistant-msg assistant-typing',
+      style: 'display:flex;align-items:center;gap:0.5rem;padding:0.75rem 1rem;color:var(--text-muted);font-size:0.85rem'
+    }, [
       PP.el('i', { 'data-lucide': 'sparkles', class: 'spin', style: 'color:var(--accent);width:16px;height:16px' }),
       'Thinking...'
     ]);
@@ -484,7 +479,7 @@ PP.Assistant = {
 
     } catch (err) {
       if (typingEl && typingEl.parentNode) typingEl.parentNode.removeChild(typingEl);
-      // Offline / client fallback
+      // Offline / client-side fallback
       this.addAssistantMessage({
         title: 'PocketPay Assistant',
         text: 'You can check your balance on the dashboard, create smart pockets, transfer funds with your 4-digit PIN, or set savings goals.',

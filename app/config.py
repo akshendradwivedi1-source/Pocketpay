@@ -2,33 +2,30 @@ import os
 from datetime import timedelta
 from dotenv import load_dotenv
 
-# Load environment variables from .env file automatically
-load_dotenv()
-
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+# Explicitly anchor to PocketPay's own .env file to prevent environment bleed
+pp_env_path = os.path.abspath(os.path.join(BASE_DIR, '..', '.env'))
+if os.path.exists(pp_env_path):
+    load_dotenv(pp_env_path, override=False)
+else:
+    load_dotenv(override=False)
 
 
 def get_database_uri():
+    instance_dir = os.path.abspath(os.path.join(BASE_DIR, '..', 'instance'))
+    os.makedirs(instance_dir, exist_ok=True)
     raw_url = (os.environ.get('DATABASE_URL') or '').strip()
     if raw_url and '://' in raw_url:
-        # Standard PostgreSQL Heroku/Render URI fix
         if raw_url.startswith('postgres://'):
-            raw_url = raw_url.replace('postgres://', 'postgresql://', 1)
-            return raw_url
+            return raw_url.replace('postgres://', 'postgresql://', 1)
         if raw_url.startswith('postgresql://'):
             return raw_url
         if raw_url.startswith('sqlite:///'):
-            sqlite_path = raw_url[len('sqlite:///'):]
-            if not os.path.isabs(sqlite_path):
-                instance_dir = os.path.abspath(os.path.join(BASE_DIR, '..', 'instance'))
-                os.makedirs(instance_dir, exist_ok=True)
-                return 'sqlite:///' + os.path.join(instance_dir, os.path.basename(sqlite_path)).replace('\\', '/')
-            return raw_url
+            db_name = os.path.basename(raw_url[len('sqlite:///'):])
+            if not db_name or 'travelease' in db_name.lower():
+                db_name = 'pocketpay.db'
+            return 'sqlite:///' + os.path.join(instance_dir, db_name).replace('\\', '/')
         return raw_url
-    
-    # Default to persistent SQLite database in instance/ folder
-    instance_dir = os.path.abspath(os.path.join(BASE_DIR, '..', 'instance'))
-    os.makedirs(instance_dir, exist_ok=True)
     return 'sqlite:///' + os.path.join(instance_dir, 'pocketpay.db').replace('\\', '/')
 
 
@@ -49,6 +46,7 @@ class Config:
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     SQLALCHEMY_ENGINE_OPTIONS = {
         'pool_pre_ping': True,
+        'pool_recycle': 300,
     }
     
     # 3. Email (Transactional HTTP APIs & Flask-Mail SMTP) Configuration
@@ -80,6 +78,14 @@ class Config:
     PIN_ATTEMPTS_LIMIT = int(os.environ.get('PIN_ATTEMPTS_LIMIT', 5))
     PIN_LOCKOUT_MINUTES = int(os.environ.get('PIN_LOCKOUT_MINUTES', 15))
     
+    # 5. Payment Gateways (Razorpay & Partner Integrations)
+    RAZORPAY_KEY_ID = (os.environ.get('RAZORPAY_KEY_ID') or '').strip()
+    RAZORPAY_KEY_SECRET = (os.environ.get('RAZORPAY_KEY_SECRET') or '').strip()
+    RAZORPAY_WEBHOOK_SECRET = (os.environ.get('RAZORPAY_WEBHOOK_SECRET') or '').strip()
+    POCKETPAY_PARTNER_API_KEY = (os.environ.get('POCKETPAY_PARTNER_API_KEY') or 'travelease_service_key_live_99812').strip()
+    TRAVELEASE_API_URL = (os.environ.get('TRAVELEASE_API_URL') or 'http://127.0.0.1:5000').strip()
+    TRAVELEASE_API_KEY = (os.environ.get('TRAVELEASE_API_KEY') or 'travelease_service_key_live_99812').strip()
+
     # 6. PocketPay AI Assistant (OpenAI Integration)
     OPENAI_API_KEY = (os.environ.get('OPENAI_API_KEY') or '').strip()
     OPENAI_MODEL = (os.environ.get('OPENAI_MODEL') or 'gpt-4o-mini').strip()

@@ -207,10 +207,10 @@ PP.Premium = {
     const cancelBtn = container.querySelector('#cancelSubBtn');
 
     if (monthlyBtn && !isPrem) {
-      monthlyBtn.onclick = () => PP.Premium.startCheckout('monthly', 99, container);
+      monthlyBtn.onclick = () => PP.Premium.openPaymentSelectionModal('monthly', 99, container);
     }
     if (yearlyBtn && !isPrem) {
-      yearlyBtn.onclick = () => PP.Premium.startCheckout('yearly', 799, container);
+      yearlyBtn.onclick = () => PP.Premium.openPaymentSelectionModal('yearly', 799, container);
     }
 
     if (cancelBtn) {
@@ -256,7 +256,7 @@ PP.Premium = {
           <p style="margin:0 auto 1.5rem;max-width:460px;font-size:0.85rem;color:var(--text-muted)">
             This executive tool is available exclusively on the PocketPay Premium plan. Upgrade now to unlock real-time financial automation and predictive analytics.
           </p>
-          <button class="btn btn-primary" onclick="document.querySelector('#subscribeMonthlyBtn')?.scrollIntoView({behavior:'smooth'})">
+          <button class="btn btn-primary" onclick="PP.Premium.openPaymentSelectionModal('monthly', 99, document.querySelector('#viewContainer'))">
             <i data-lucide="sparkles"></i> Upgrade Plan to Unlock
           </button>
         </div>
@@ -1196,103 +1196,82 @@ PP.Premium = {
     };
   },
 
-  // ========== CHECKOUT & VERIFICATION (PART 1 FIX) ==========
-  async startCheckout(plan, amount, container) {
-    try {
-      PP.UI.toast('Initiating Checkout', `Setting up ${plan.toUpperCase()} subscription order...`, 'info');
-      
-      // Step 1: Create Order via PocketPay Backend
-      const res = await PP.PremiumAPI.createCheckoutOrder(plan);
-      const orderData = res.data || res;
+  // ========== PAYMENT SELECTION & GATEWAYS ==========
+  openPaymentSelectionModal(plan = 'monthly', amount = 99, container) {
+    // Clean up any existing payment selection modals
+    document.querySelectorAll('.payment-selection-modal-backdrop').forEach(m => m.remove());
 
-      if (!orderData || !orderData.order_id) {
-        throw new Error(res.message || 'Unable to generate order credentials from gateway.');
-      }
-
-      if (orderData.sandbox || orderData.is_sandbox || !window.Razorpay) {
-        // Developer sandbox mode modal
-        PP.Premium.showSandboxCheckout(orderData, plan, amount, container);
-      } else {
-        // Live Razorpay Checkout
-        const rzpOptions = {
-          key: orderData.key_id,
-          amount: orderData.amount_paise || (amount * 100),
-          currency: orderData.currency || 'INR',
-          name: 'PocketPay Premium',
-          description: `${plan.toUpperCase()} Subscription`,
-          order_id: orderData.order_id,
-          prefill: {
-            name: PP.state.user?.full_name || PP.state.user?.name || '',
-            email: PP.state.user?.email || ''
-          },
-          theme: {
-            color: '#6366f1'
-          },
-          handler: async function (response) {
-            await PP.Premium.completeVerification({
-              order_id: response.razorpay_order_id,
-              payment_id: response.razorpay_payment_id,
-              signature: response.razorpay_signature
-            }, plan, container);
-          },
-          modal: {
-            ondismiss: function () {
-              PP.UI.toast('Payment Cancelled', 'Your payment was cancelled.', 'warning');
-            }
-          }
-        };
-        const rzp = new window.Razorpay(rzpOptions);
-        rzp.open();
-      }
-    } catch (err) {
-      PP.UI.toast('Order Creation Error', err.message || 'Unable to create payment order. Please try again.', 'error');
-    }
-  },
-
-  showSandboxCheckout(orderData, plan, amount, container) {
     const modal = document.createElement('div');
-    modal.className = 'modal-backdrop';
-    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:9999;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(6px);padding:1rem';
+    modal.className = 'modal-backdrop payment-selection-modal-backdrop';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:9999;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(8px);padding:1rem';
 
     modal.innerHTML = `
-      <div class="glass-card" style="width:100%;max-width:440px;background:var(--surface);border:1px solid rgba(99,102,241,0.4);border-radius:24px;padding:2rem;box-shadow:0 24px 60px rgba(0,0,0,0.5)">
+      <div class="glass-card" style="width:100%;max-width:480px;background:var(--bg-2, #111424);border:1px solid rgba(99,102,241,0.4);border-radius:24px;padding:2rem;box-shadow:0 24px 60px rgba(0,0,0,0.6);animation:modalIn .25s ease both">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.25rem">
-          <div style="display:flex;align-items:center;gap:0.6rem">
-            <span style="font-size:1.4rem">🛡️</span>
+          <div style="display:flex;align-items:center;gap:0.75rem">
+            <div style="width:42px;height:42px;border-radius:12px;background:linear-gradient(135deg,#6366f1,#a855f7);display:flex;align-items:center;justify-content:center;font-size:1.3rem;box-shadow:0 4px 12px rgba(99,102,241,0.35);color:white">
+              👑
+            </div>
             <div>
-              <h3 style="margin:0;font-size:1.15rem;font-weight:700">PocketPay Checkout</h3>
-              <p style="margin:0;font-size:0.75rem;color:var(--text-muted)">Secure Gateway Mode</p>
+              <h3 style="margin:0;font-size:1.2rem;font-weight:700">Choose Payment Method</h3>
+              <p style="margin:0;font-size:0.8rem;color:var(--text-muted)">Secure Subscription Checkout</p>
             </div>
           </div>
-          <button id="closeRzpModal" class="btn btn-ghost" style="padding:4px"><i data-lucide="x"></i></button>
+          <button id="closePaySelectionBtn" class="btn btn-ghost" style="padding:6px;border-radius:50%;width:36px;height:36px"><i data-lucide="x"></i></button>
         </div>
 
-        <div style="background:rgba(99,102,241,0.08);border-radius:14px;padding:1rem;margin-bottom:1.5rem">
-          <div style="display:flex;justify-content:space-between;margin-bottom:0.4rem;font-size:0.85rem">
-            <span style="color:var(--text-muted)">Plan:</span>
-            <span style="font-weight:600">${plan.toUpperCase()}</span>
+        <!-- Plan Summary Banner -->
+        <div style="background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.25);border-radius:16px;padding:1rem 1.25rem;margin-bottom:1.5rem;display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <div style="font-size:0.75rem;text-transform:uppercase;color:var(--text-muted);letter-spacing:0.5px;font-weight:600">Selected Plan</div>
+            <div style="font-size:1.05rem;font-weight:700;color:var(--text);margin-top:2px">PocketPay Pro (${plan.toUpperCase()})</div>
           </div>
-          <div style="display:flex;justify-content:space-between;margin-bottom:0.4rem;font-size:0.85rem">
-            <span style="color:var(--text-muted)">Amount:</span>
-            <span style="font-weight:700;color:var(--accent);font-size:1.1rem">₹${amount}</span>
-          </div>
-          <div style="display:flex;justify-content:space-between;font-size:0.75rem;font-family:monospace;color:var(--text-dim)">
-            <span>Order ID:</span>
-            <span>${orderData.order_id}</span>
+          <div style="text-align:right">
+            <div style="font-size:0.75rem;text-transform:uppercase;color:var(--text-muted);letter-spacing:0.5px;font-weight:600">Total Due</div>
+            <div style="font-size:1.35rem;font-weight:800;color:var(--accent);margin-top:2px">₹${amount}</div>
           </div>
         </div>
 
-        <p style="font-size:0.8rem;color:var(--text-muted);line-height:1.4;margin-bottom:1.5rem">
-          <b>Gateway Simulation:</b> Verifying payment signature end-to-end. This issues a cryptographically verified receipt and executes the activation handshake on the backend.
+        <p style="font-size:0.85rem;color:var(--text-muted);margin:0 0 1rem 0;font-weight:500">
+          Select how you want to pay for your PocketPay Premium subscription:
         </p>
 
-        <div style="display:flex;flex-direction:column;gap:0.75rem">
-          <button id="rzpSimulateSuccess" class="btn btn-primary" style="width:100%;font-weight:700">
-            <i data-lucide="check-circle"></i> Complete Payment (₹${amount})
+        <!-- Payment Options Grid -->
+        <div class="payment-methods-grid">
+          <!-- Option 1: Razorpay -->
+          <button type="button" class="payment-method-card" id="selectRazorpayBtn">
+            <div class="method-icon-box" style="background:linear-gradient(135deg, #0284c7, #2563eb);color:white;box-shadow:0 4px 14px rgba(2,132,199,0.35)">
+              💳
+            </div>
+            <div class="method-info">
+              <div class="method-title">
+                Pay with Razorpay
+                <span class="chip info method-badge" style="font-size:0.7rem;padding:2px 8px">Gateway</span>
+              </div>
+              <p class="method-desc">Credit/Debit Cards, UPI (GPay, PhonePe, Paytm), NetBanking & Wallets</p>
+            </div>
+            <i data-lucide="chevron-right" style="color:var(--text-dim);width:20px;flex-shrink:0"></i>
           </button>
-          <button id="rzpSimulateFailure" class="btn btn-outline" style="width:100%;border-color:var(--danger);color:var(--danger)">
-            <i data-lucide="x-circle"></i> Cancel Payment
+
+          <!-- Option 2: PocketPay -->
+          <button type="button" class="payment-method-card" id="selectPocketpayBtn">
+            <div class="method-icon-box" style="background:linear-gradient(135deg, #6366f1, #10b981);color:white;box-shadow:0 4px 14px rgba(99,102,241,0.35)">
+              👛
+            </div>
+            <div class="method-info">
+              <div class="method-title">
+                Pay with PocketPay
+                <span class="chip success method-badge" style="font-size:0.7rem;padding:2px 8px">Wallet Balance</span>
+              </div>
+              <p class="method-desc">Pay directly from your PocketPay wallet balance with 2FA email OTP</p>
+            </div>
+            <i data-lucide="chevron-right" style="color:var(--text-dim);width:20px;flex-shrink:0"></i>
           </button>
+        </div>
+
+        <div style="display:flex;align-items:center;justify-content:center;gap:0.4rem;font-size:0.75rem;color:var(--text-dim);margin-top:1.25rem">
+          <i data-lucide="lock" style="width:14px;height:14px;color:var(--success)"></i>
+          <span>Bank-grade 256-bit encryption · Server verified signature</span>
         </div>
       </div>
     `;
@@ -1300,37 +1279,81 @@ PP.Premium = {
     document.body.appendChild(modal);
     PP.refreshIcons();
 
-    modal.querySelector('#closeRzpModal').onclick = () => modal.remove();
+    modal.querySelector('#closePaySelectionBtn').onclick = () => modal.remove();
 
-    modal.querySelector('#rzpSimulateFailure').onclick = () => {
+    modal.querySelector('#selectRazorpayBtn').onclick = () => {
       modal.remove();
-      PP.UI.toast('Payment Cancelled', 'Your payment was cancelled. Free tier maintained.', 'warning');
+      PP.Premium.startRazorpayCheckout(plan, amount, container);
     };
 
-    modal.querySelector('#rzpSimulateSuccess').onclick = async () => {
-      const btn = modal.querySelector('#rzpSimulateSuccess');
-      btn.disabled = true;
-      btn.innerHTML = '<i data-lucide="loader" class="spin"></i> Verifying Server Signature...';
-      PP.refreshIcons();
-
-      try {
-        const testPaymentId = 'pay_sandbox_' + Date.now().toString(36);
-        const testSig = 'sig_sandbox_' + orderData.order_id;
-        
-        modal.remove();
-        await PP.Premium.completeVerification({
-          order_id: orderData.order_id,
-          payment_id: testPaymentId,
-          signature: testSig
-        }, plan, container);
-      } catch (err) {
-        modal.remove();
-        PP.UI.toast('Verification Failed', err.message || 'Signature verification failed', 'error');
-      }
+    modal.querySelector('#selectPocketpayBtn').onclick = () => {
+      modal.remove();
+      PP.Premium.openPocketPayPaymentModal(plan, amount, container);
     };
   },
 
-  async completeVerification(verifyPayload, plan, container) {
+  // ========== 1. RAZORPAY PAYMENT FLOW ==========
+  async startRazorpayCheckout(plan, amount, container) {
+    try {
+      PP.UI.toast('Connecting to Razorpay', 'Creating secure gateway order...', 'info');
+
+      // 1. Create order on Flask backend
+      const res = await PP.PremiumAPI.createCheckoutOrder(plan);
+      const orderData = res.data || res;
+
+      if (!orderData || !orderData.order_id) {
+        throw new Error(res.message || 'Unable to create order with Razorpay gateway.');
+      }
+
+      if (!window.Razorpay) {
+        PP.UI.toast('Gateway Error', 'Razorpay Checkout SDK is not loaded. Please verify your internet connection and refresh.', 'error');
+        return;
+      }
+
+      // 2. Open Standard Razorpay Checkout
+      const rzpOptions = {
+        key: orderData.key_id,
+        amount: orderData.amount_paise || (amount * 100),
+        currency: orderData.currency || 'INR',
+        name: 'PocketPay Premium',
+        description: `${plan.toUpperCase()} Plan Subscription`,
+        order_id: orderData.order_id,
+        prefill: {
+          name: PP.state.user?.full_name || PP.state.user?.name || '',
+          email: PP.state.user?.email || '',
+          contact: PP.state.user?.phone || ''
+        },
+        theme: {
+          color: '#6366f1'
+        },
+        handler: async function (response) {
+          // Cryptographically verified on server
+          await PP.Premium.completeRazorpayVerification({
+            order_id: response.razorpay_order_id,
+            payment_id: response.razorpay_payment_id,
+            signature: response.razorpay_signature
+          }, plan, container);
+        },
+        modal: {
+          ondismiss: function () {
+            PP.UI.toast('Payment Cancelled', 'Razorpay checkout was dismissed without payment. Premium has not been activated.', 'warning');
+          }
+        }
+      };
+
+      const rzp = new window.Razorpay(rzpOptions);
+      if (rzp.on) {
+        rzp.on('payment.failed', function (resp) {
+          PP.UI.toast('Payment Failed', resp.error?.description || 'Payment could not be processed. Premium remains inactive.', 'error');
+        });
+      }
+      rzp.open();
+    } catch (err) {
+      PP.UI.toast('Order Creation Error', err.message || 'Unable to initialize Razorpay checkout. Please try again.', 'error');
+    }
+  },
+
+  async completeRazorpayVerification(verifyPayload, plan, container) {
     PP.UI.toast('Verifying Payment', 'Validating server signature and activating subscription...', 'info');
 
     try {
@@ -1345,11 +1368,12 @@ PP.Premium = {
 
         PP.UI.showSuccess({
           title: '🎉 Welcome to PocketPay Premium!',
-          sub: 'Your Premium plan has been verified and activated.',
+          sub: 'Your Premium plan has been verified and activated via Razorpay.',
           meta: [
             { label: 'Plan', value: (sub.plan || plan).toUpperCase() },
+            { label: 'Payment Gateway', value: 'Razorpay' },
             { label: 'Valid until', value: expDate },
-            { label: 'Transaction Reference', value: sub.payment_id || verifyPayload.payment_id || 'CONFIRMED' }
+            { label: 'Payment ID', value: verifyPayload.payment_id || sub.provider_payment_id || 'VERIFIED' }
           ]
         });
 
@@ -1360,5 +1384,230 @@ PP.Premium = {
     } catch (e) {
       PP.UI.toast('Verification Failed', e.message || 'Payment verification failed. Your Premium plan has not been activated.', 'error');
     }
+  },
+
+  // ========== 2. POCKETPAY PAYMENT FLOW (2FA OTP & WALLET DEDUCTION) ==========
+  openPocketPayPaymentModal(plan = 'monthly', amount = 99, container) {
+    document.querySelectorAll('.pocketpay-checkout-modal-backdrop').forEach(m => m.remove());
+
+    const modal = document.createElement('div');
+    modal.className = 'modal-backdrop pocketpay-checkout-modal-backdrop';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:9999;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(8px);padding:1rem';
+
+    const defaultIdentifier = PP.state.user?.virtual_wallet_id || PP.state.user?.virtual_upi_id || PP.state.user?.email || '';
+    const userWalletBal = Number(PP.state.user?.wallet_balance || 0);
+
+    modal.innerHTML = `
+      <div class="glass-card" style="width:100%;max-width:460px;background:var(--bg-2, #111424);border:1px solid rgba(99,102,241,0.4);border-radius:24px;padding:2rem;box-shadow:0 24px 60px rgba(0,0,0,0.6);animation:modalIn .25s ease both">
+        <!-- Modal Header -->
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.25rem">
+          <div style="display:flex;align-items:center;gap:0.75rem">
+            <div style="width:40px;height:40px;border-radius:12px;background:linear-gradient(135deg,#6366f1,#10b981);display:flex;align-items:center;justify-content:center;font-size:1.25rem;color:white">
+              👛
+            </div>
+            <div>
+              <h3 style="margin:0;font-size:1.15rem;font-weight:700">Pay with PocketPay</h3>
+              <p style="margin:0;font-size:0.78rem;color:var(--text-muted)">PocketPay Wallet Deduction</p>
+            </div>
+          </div>
+          <button id="closePpModalBtn" class="btn btn-ghost" style="padding:6px;border-radius:50%;width:34px;height:34px"><i data-lucide="x"></i></button>
+        </div>
+
+        <!-- Plan & Wallet Balance Pill -->
+        <div style="background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.25);border-radius:16px;padding:1rem 1.25rem;margin-bottom:1.5rem">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem">
+            <span style="font-size:0.82rem;color:var(--text-muted)">Plan: <b>PocketPay Pro (${plan.toUpperCase()})</b></span>
+            <span style="font-size:1.15rem;font-weight:800;color:var(--accent)">₹${amount}</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center;font-size:0.8rem;padding-top:0.4rem;border-top:1px solid rgba(255,255,255,0.06)">
+            <span style="color:var(--text-dim)">Available Wallet Balance:</span>
+            <span style="font-weight:700;color:${userWalletBal >= amount ? 'var(--success)' : 'var(--danger)'}">
+              ₹${userWalletBal.toFixed(2)}
+              ${userWalletBal < amount ? ' (Insufficient)' : ''}
+            </span>
+          </div>
+        </div>
+
+        <!-- Dynamic Container (Step 1 vs Step 2) -->
+        <div id="ppFlowBody">
+          <!-- Step 1: Identifier Input -->
+          <div id="ppStep1">
+            <div style="margin-bottom:1.25rem">
+              <label style="display:block;font-size:0.82rem;font-weight:600;margin-bottom:0.5rem;color:var(--text)">
+                PocketPay ID or UPI ID
+              </label>
+              <div style="position:relative">
+                <input type="text" id="ppAccountInput" class="form-input" value="${defaultIdentifier}" placeholder="e.g. PPW9988776655 or user@pocketpay" style="width:100%;padding:0.75rem 1rem;border-radius:12px;background:var(--surface);border:1px solid var(--border);color:var(--text);font-size:0.9rem" />
+              </div>
+              <p style="margin:0.4rem 0 0 0;font-size:0.75rem;color:var(--text-dim)">
+                We will verify your balance and send a 6-digit confirmation OTP to your registered email.
+              </p>
+            </div>
+
+            <div id="ppStep1Alert" style="display:none;margin-bottom:1.25rem;padding:0.75rem 1rem;background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.3);border-radius:12px;color:var(--danger);font-size:0.82rem;line-height:1.4"></div>
+
+            <div style="display:flex;flex-direction:column;gap:0.6rem">
+              <button class="btn btn-primary" id="ppInitiateBtn" style="width:100%;font-weight:700;padding:0.85rem">
+                <i data-lucide="mail"></i> Verify Account & Send OTP
+              </button>
+              <button class="btn btn-ghost" id="ppCancelStep1Btn" style="width:100%;color:var(--text-dim)">
+                Cancel
+              </button>
+            </div>
+          </div>
+
+          <!-- Step 2: OTP Entry (Initially Hidden) -->
+          <div id="ppStep2" style="display:none">
+            <div style="background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.25);border-radius:14px;padding:0.85rem 1rem;margin-bottom:1.25rem;display:flex;align-items:center;gap:0.75rem">
+              <i data-lucide="mail-check" style="color:var(--success);width:22px;height:22px;flex-shrink:0"></i>
+              <div style="font-size:0.82rem;line-height:1.4;color:var(--text)">
+                Verification OTP sent to <b id="ppMaskedEmailText" style="color:var(--accent)">registered email</b>
+              </div>
+            </div>
+
+            <div style="margin-bottom:1.25rem">
+              <label style="display:block;font-size:0.82rem;font-weight:600;margin-bottom:0.5rem;text-align:center;color:var(--text)">
+                Enter 6-Digit OTP Code
+              </label>
+              <input type="text" id="ppOtpInput" class="form-input" maxlength="6" placeholder="• • • • • •" autocomplete="one-time-code" style="width:100%;padding:0.85rem;text-align:center;font-size:1.6rem;letter-spacing:10px;font-family:monospace;font-weight:700;border-radius:14px;background:var(--surface);border:1px solid var(--accent);color:var(--text)" />
+              <p style="margin:0.4rem 0 0 0;font-size:0.75rem;color:var(--text-dim);text-align:center">
+                Check your inbox for the OTP code to authorize ₹${amount} deduction.
+              </p>
+            </div>
+
+            <div id="ppStep2Alert" style="display:none;margin-bottom:1.25rem;padding:0.75rem 1rem;background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.3);border-radius:12px;color:var(--danger);font-size:0.82rem;line-height:1.4"></div>
+
+            <div style="display:flex;flex-direction:column;gap:0.6rem">
+              <button class="btn btn-primary" id="ppConfirmOtpBtn" style="width:100%;font-weight:700;padding:0.85rem">
+                <i data-lucide="shield-check"></i> Authorize & Deduct ₹${amount}
+              </button>
+              <button class="btn btn-outline" id="ppBackToAccountBtn" style="width:100%;font-size:0.85rem">
+                Change Account ID
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(modal);
+    PP.refreshIcons();
+
+    modal.querySelector('#closePpModalBtn').onclick = () => modal.remove();
+    modal.querySelector('#ppCancelStep1Btn').onclick = () => modal.remove();
+
+    let currentIdentifier = defaultIdentifier;
+
+    // STEP 1 HANDLER: Send OTP
+    const initiateBtn = modal.querySelector('#ppInitiateBtn');
+    const step1Alert = modal.querySelector('#ppStep1Alert');
+
+    initiateBtn.onclick = async () => {
+      const accountVal = (modal.querySelector('#ppAccountInput').value || '').trim();
+      if (!accountVal) {
+        step1Alert.textContent = 'Please enter your PocketPay ID or UPI ID.';
+        step1Alert.style.display = 'block';
+        return;
+      }
+
+      try {
+        initiateBtn.disabled = true;
+        initiateBtn.innerHTML = '<i data-lucide="loader" class="spin"></i> Verifying & Sending OTP...';
+        step1Alert.style.display = 'none';
+        PP.refreshIcons();
+
+        const res = await PP.PremiumAPI.initiatePocketPay({
+          plan_id: plan,
+          identifier: accountVal
+        });
+
+        const data = res.data || res;
+        currentIdentifier = accountVal;
+
+        // Transition to Step 2
+        modal.querySelector('#ppStep1').style.display = 'none';
+        modal.querySelector('#ppStep2').style.display = 'block';
+        modal.querySelector('#ppMaskedEmailText').textContent = data.masked_email || 'your email';
+        const otpInput = modal.querySelector('#ppOtpInput');
+        otpInput.value = '';
+        otpInput.focus();
+        PP.refreshIcons();
+        PP.UI.toast('OTP Sent', `Verification code sent to ${data.masked_email}`, 'success');
+      } catch (err) {
+        step1Alert.textContent = err.message || 'Unable to initiate PocketPay payment. Please check your balance and account ID.';
+        step1Alert.style.display = 'block';
+        initiateBtn.disabled = false;
+        initiateBtn.innerHTML = '<i data-lucide="mail"></i> Verify Account & Send OTP';
+        PP.refreshIcons();
+      }
+    };
+
+    // STEP 2: Back button
+    modal.querySelector('#ppBackToAccountBtn').onclick = () => {
+      modal.querySelector('#ppStep2').style.display = 'none';
+      modal.querySelector('#ppStep1').style.display = 'block';
+      initiateBtn.disabled = false;
+      initiateBtn.innerHTML = '<i data-lucide="mail"></i> Verify Account & Send OTP';
+      PP.refreshIcons();
+    };
+
+    // STEP 2 HANDLER: Confirm OTP & Deduct
+    const confirmBtn = modal.querySelector('#ppConfirmOtpBtn');
+    const step2Alert = modal.querySelector('#ppStep2Alert');
+
+    confirmBtn.onclick = async () => {
+      const otpVal = (modal.querySelector('#ppOtpInput').value || '').trim();
+      if (!otpVal || otpVal.length < 4) {
+        step2Alert.textContent = 'Please enter the 6-digit OTP code sent to your email.';
+        step2Alert.style.display = 'block';
+        return;
+      }
+
+      try {
+        confirmBtn.disabled = true;
+        confirmBtn.innerHTML = `<i data-lucide="loader" class="spin"></i> Deducting ₹${amount} & Activating...`;
+        step2Alert.style.display = 'none';
+        PP.refreshIcons();
+
+        const res = await PP.PremiumAPI.confirmPocketPay({
+          plan_id: plan,
+          identifier: currentIdentifier,
+          otp: otpVal
+        });
+
+        const data = res.data || res;
+
+        // Close modal
+        modal.remove();
+
+        // Refresh global wallet and user state
+        await PP.loadState?.();
+
+        const sub = data.subscription || {};
+        const expDate = sub.expiry_date ? new Date(sub.expiry_date).toLocaleDateString() : 'Active';
+
+        PP.UI.showSuccess({
+          title: '🎉 Welcome to PocketPay Premium!',
+          sub: `₹${amount.toFixed(2)} was successfully deducted from your PocketPay wallet.`,
+          meta: [
+            { label: 'Plan', value: `PocketPay Pro (${plan.toUpperCase()})` },
+            { label: 'Payment Method', value: 'PocketPay Wallet' },
+            { label: 'Account Debited', value: currentIdentifier },
+            { label: 'Transaction Reference', value: data.transaction_id || 'COMPLETED' },
+            { label: 'Valid until', value: expDate }
+          ]
+        });
+
+        // Re-render premium dashboard with all features unlocked
+        PP.Premium.render(container);
+      } catch (err) {
+        step2Alert.textContent = err.message || 'OTP verification or deduction failed. Premium remains inactive.';
+        step2Alert.style.display = 'block';
+        confirmBtn.disabled = false;
+        confirmBtn.innerHTML = `<i data-lucide="shield-check"></i> Authorize & Deduct ₹${amount}`;
+        PP.refreshIcons();
+      }
+    };
   }
 };
+

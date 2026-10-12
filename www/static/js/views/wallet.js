@@ -74,8 +74,9 @@ PP.Wallet = {
       ]);
       const statsGrid = PP.el('div', { class: 'two-col-grid', style: 'gap:.75rem' });
       [
-        ['Pocket Balance', b.pocket_balance || 0, 'piggy-bank'],
-        ['Wallet Balance', b.wallet_balance || 0, 'wallet'],
+        ['Total Funds', b.total_funds || ((b.wallet_balance || 0) + (b.pocket_balance || 0)), 'shield-check'],
+        ['Available Balance', b.available_balance || b.wallet_balance || 0, 'wallet'],
+        ['In Pockets', b.pocket_balance || 0, 'piggy-bank'],
         ['Monthly Income', b.monthly_income || 0, 'trending-up'],
         ['Monthly Expense', b.monthly_expense || 0, 'trending-down'],
       ].forEach(s => {

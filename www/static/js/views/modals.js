@@ -14,6 +14,11 @@ PP.Modals = {
     let descriptionVal = editing ? (existing.description || '') : '';
     let nameVal = editing ? existing.name : '';
 
+    let fundingSource = 'main_balance';
+    let peerIdentifier = '';
+    let bankCode = 'HDFC';
+    let noteVal = '';
+
     const modal = PP.UI.modal({
       title: editing ? 'Edit Pocket' : 'Create New Pocket',
       subtitle: editing ? 'Update your pocket details' : 'Organize your money with custom pockets',
@@ -72,16 +77,91 @@ PP.Modals = {
           return g;
         })(),
       ]));
+
       if (!editing) {
+        // Multi-source funding section
+        body.appendChild(PP.el('div', { class: 'form-group' }, [
+          PP.el('label', { class: 'form-label' }, ['Funding Source']),
+          (() => {
+            const sel = PP.el('select', { class: 'form-select' });
+            [
+              { v: 'main_balance', l: 'Available Balance (Self funded from main wallet)' },
+              { v: 'peer_user', l: 'Another PocketPay User (Peer request)' },
+              { v: 'external_bank', l: 'External Bank (Sandbox Net Banking)' },
+              { v: 'request_money', l: 'Request Money (Creates formal money request)' },
+              { v: 'fund_later', l: 'Fund Later (Zero balance pocket)' }
+            ].forEach(opt => {
+              const o = PP.el('option', { value: opt.v }, [opt.l]);
+              if (fundingSource === opt.v) o.selected = true;
+              sel.appendChild(o);
+            });
+            sel.onchange = () => { fundingSource = sel.value; renderBody(); };
+            return sel;
+          })(),
+          (() => {
+            const hints = {
+              main_balance: `Funds will be immediately moved from your Available Balance (₹${PP.fmt(PP.state.user?.wallet_balance || 0).replace('₹','')}) into this pocket. Total funds remain unchanged.`,
+              peer_user: 'Pocket is created immediately. Initial funding will be requested from another PocketPay user.',
+              external_bank: 'Deposit initial funds directly from an external partner bank in sandbox mode.',
+              request_money: 'Creates a pending money request linked to this pocket. Upon payment, funds credit directly here.',
+              fund_later: 'Creates an empty pocket with ₹0.00. You can allocate funds from available balance or transfers at any time.'
+            };
+            return PP.el('div', { class: 'form-hint', style: 'color:var(--text-muted);font-size:0.8rem;margin-top:0.35rem' }, [hints[fundingSource] || '']);
+          })()
+        ]));
+
+        if (fundingSource !== 'fund_later') {
+          const rowChildren = [
+            PP.el('div', { class: 'form-group' }, [
+              PP.el('label', { class: 'form-label' }, [fundingSource === 'request_money' ? 'Requested Amount (₹)' : 'Initial Balance (₹)']),
+              (() => {
+                const inp = PP.el('input', { class: 'form-input', type: 'number', min: '0', step: '0.01', placeholder: '0.00', value: initialBalance || '' });
+                inp.oninput = () => initialBalance = parseFloat(inp.value) || 0;
+                return inp;
+              })(),
+            ])
+          ];
+
+          if (fundingSource === 'peer_user' || fundingSource === 'request_money') {
+            rowChildren.push(
+              PP.el('div', { class: 'form-group' }, [
+                PP.el('label', { class: 'form-label' }, ['Peer User (Email / Phone / UPI ID) *']),
+                (() => {
+                  const inp = PP.el('input', { class: 'form-input', placeholder: 'e.g. user@pocketpay or 9876543210', value: peerIdentifier });
+                  inp.oninput = () => peerIdentifier = inp.value;
+                  return inp;
+                })(),
+              ])
+            );
+          } else if (fundingSource === 'external_bank') {
+            rowChildren.push(
+              PP.el('div', { class: 'form-group' }, [
+                PP.el('label', { class: 'form-label' }, ['Select Bank (Sandbox)']),
+                (() => {
+                  const sel = PP.el('select', { class: 'form-select' });
+                  [
+                    { c: 'HDFC', n: 'HDFC Bank' },
+                    { c: 'SBIN', n: 'State Bank of India' },
+                    { c: 'ICIC', n: 'ICICI Bank' },
+                    { c: 'UTIB', n: 'Axis Bank' },
+                    { c: 'KKBK', n: 'Kotak Mahindra Bank' },
+                    { c: 'PUNB', n: 'Punjab National Bank' },
+                  ].forEach(b => {
+                    const o = PP.el('option', { value: b.c }, [b.n]);
+                    if (bankCode === b.c) o.selected = true;
+                    sel.appendChild(o);
+                  });
+                  sel.onchange = () => bankCode = sel.value;
+                  return sel;
+                })(),
+              ])
+            );
+          }
+
+          body.appendChild(PP.el('div', { class: 'form-row' }, rowChildren));
+        }
+
         body.appendChild(PP.el('div', { class: 'form-row' }, [
-          PP.el('div', { class: 'form-group' }, [
-            PP.el('label', { class: 'form-label' }, ['Initial Balance']),
-            (() => {
-              const inp = PP.el('input', { class: 'form-input', type: 'number', min: '0', step: '0.01', placeholder: '0.00', value: initialBalance || '' });
-              inp.oninput = () => initialBalance = parseFloat(inp.value) || 0;
-              return inp;
-            })(),
-          ]),
           PP.el('div', { class: 'form-group' }, [
             PP.el('label', { class: 'form-label' }, ['Priority']),
             (() => {
@@ -97,6 +177,7 @@ PP.Modals = {
           ]),
         ]));
       }
+
       body.appendChild(PP.el('div', { class: 'form-row' }, [
         PP.el('div', { class: 'form-group' }, [
           PP.el('label', { class: 'form-label' }, ['Total Budget (optional)']),
@@ -124,9 +205,13 @@ PP.Modals = {
         class: 'btn btn-primary',
         onclick: async () => {
           if (!nameVal?.trim()) return PP.UI.toast('Name required', 'Please enter a pocket name', 'warning');
-          saveBtn.disabled = true; saveBtn.innerHTML = '<i data-lucide="loader-2" style="animation:slowSpin 1s linear infinite"></i> Saving…';
+          if (!editing && (fundingSource === 'peer_user' || fundingSource === 'request_money') && !peerIdentifier?.trim()) {
+            return PP.UI.toast('Peer Required', 'Please enter the peer user email, phone, or UPI ID', 'warning');
+          }
+          saveBtn.disabled = true; saveBtn.innerHTML = '<i data-lucide="loader-2" style="animation:slowSpin 1s linear infinite"></i> Processing…';
           PP.refreshIcons();
           try {
+            const idempKey = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : ('pp_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9));
             const payload = {
               name: nameVal.trim(),
               description: descriptionVal.trim() || null,
@@ -136,8 +221,15 @@ PP.Modals = {
               budget_amount: budgetAmount,
               monthly_limit: monthlyLimit,
               priority,
+              idempotency_key: idempKey
             };
-            if (!editing) payload.initial_balance = initialBalance;
+            if (!editing) {
+              payload.funding_source = fundingSource;
+              payload.initial_balance = (fundingSource === 'fund_later') ? 0 : initialBalance;
+              payload.peer_identifier = peerIdentifier.trim();
+              payload.bank_code = bankCode;
+              payload.note = noteVal;
+            }
             const res = editing ? await PP.PocketsAPI.update(existing.id, payload) : await PP.PocketsAPI.create(payload);
             PP.UI.toast(editing ? 'Pocket updated' : 'Pocket created', res.message || '', 'success');
             modal.close();
@@ -415,7 +507,611 @@ PP.Modals = {
     await renderBody();
   },
 
+  // =========================================================================
+  // PART 1: UNIFIED PAYMENT SCREEN (PAY SECURELY)
+  // =========================================================================
+
+  openPaymentHub(opts = {}) {
+    const user = PP.state.user || {};
+    const walletBal = Number(user.wallet_balance || 0);
+    const pockets = PP.state.pockets || [];
+    const activePockets = pockets.filter(p => !p.archived);
+
+    const modal = PP.UI.modal({
+      title: 'PAY SECURELY',
+      subtitle: 'Choose Payment Method',
+      icon: 'shield-check',
+      iconClass: 'bg-accent',
+      size: 'md'
+    });
+
+    const body = PP.el('div', { style: 'display:flex;flex-direction:column;gap:0.85rem' });
+
+    const methods = [
+      {
+        id: 'balance',
+        title: '💰 PocketPay Balance',
+        sub: `Available funds: ₹${PP.fmt(walletBal).replace('₹', '')}`,
+        badge: 'Instant',
+        badgeCls: 'success',
+        fn: () => { modal.close(); PP.Modals.payFromBalance(opts); }
+      },
+      {
+        id: 'pocket',
+        title: '👛 Pay From a Pocket',
+        sub: `${activePockets.length} Active Pocket Envelopes (Travel, Shopping, etc.)`,
+        badge: 'Envelopes',
+        badgeCls: 'primary',
+        fn: () => { modal.close(); PP.Modals.payFromPocket(null, opts); }
+      },
+      {
+        id: 'qr',
+        title: '📷 Scan QR',
+        sub: 'Universal scanner for UPI & PocketPay digital codes',
+        badge: 'Camera',
+        badgeCls: 'accent',
+        fn: () => { modal.close(); PP.Modals.scanAndPay(); }
+      },
+      {
+        id: 'netbanking',
+        title: '🏦 Beneficiary / Netbanking',
+        sub: 'IMPS / NEFT transfer to verified bank accounts',
+        badge: 'Bank Transfer',
+        badgeCls: 'info',
+        fn: () => { modal.close(); PP.Modals.unifiedTransferHub(); }
+      }
+    ];
+
+    methods.forEach(m => {
+      const card = PP.el('button', {
+        class: 'glass-card payment-method-card',
+        style: 'display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:1.1rem 1.25rem;border-radius:14px;border:1px solid var(--border);background:var(--surface);cursor:pointer;width:100%;text-align:left;transition:all 0.2s ease',
+        onclick: m.fn
+      }, [
+        PP.el('div', { style: 'flex:1;min-width:0' }, [
+          PP.el('div', { style: 'display:flex;align-items:center;gap:8px;margin-bottom:4px' }, [
+            PP.el('span', { style: 'font-weight:700;font-size:1rem;color:var(--text)' }, [m.title]),
+            PP.el('span', { class: `chip ${m.badgeCls}`, style: 'font-size:0.68rem;padding:1px 7px' }, [m.badge])
+          ]),
+          PP.el('div', { style: 'font-size:0.8rem;color:var(--text-muted)' }, [m.sub])
+        ]),
+        PP.el('i', { 'data-lucide': 'chevron-right', style: 'color:var(--text-dim);width:18px;height:18px;flex-shrink:0' })
+      ]);
+      body.appendChild(card);
+    });
+
+    modal.body.innerHTML = '';
+    modal.body.appendChild(body);
+    modal.footer.innerHTML = '';
+    modal.footer.appendChild(PP.el('button', { class: 'btn btn-ghost', onclick: () => modal.close() }, ['Close']));
+    PP.refreshIcons();
+  },
+
+  openPayModal(opts = {}) {
+    return PP.Modals.openPaymentHub(opts);
+  },
+
+  // =========================================================================
+  // PART 2: PAY DIRECTLY FROM POCKETS
+  // =========================================================================
+
+  async payFromPocket(preselectedPocketId = null, opts = {}) {
+    const pockets = await PP.PocketsAPI.list({ per_page: 200 }).then(r => r.data.items).catch(() => PP.state.pockets || []) || [];
+    const activePockets = pockets.filter(p => !p.archived);
+    PP.state.pockets = pockets;
+
+    if (!activePockets.length) {
+      PP.UI.toast('No Pockets Available', 'Please create a pocket first before making pocket payments.', 'warning');
+      return PP.Modals.createPocket();
+    }
+
+    let selectedPocketId = preselectedPocketId || activePockets[0]?.id;
+    let step = preselectedPocketId ? 2 : 1;
+    let amount = 0;
+    let recipient = '';
+    let note = '';
+
+    const modal = PP.UI.modal({
+      title: 'Pay From a Pocket',
+      subtitle: 'Real server-side debit from your pocket balance',
+      icon: 'wallet-cards',
+      iconClass: 'bg-primary',
+      size: 'md'
+    });
+
+    const render = () => {
+      const pocket = activePockets.find(p => p.id == selectedPocketId) || activePockets[0];
+      const available = Number(pocket?.current_balance || 0);
+
+      const body = PP.el('div', { style: 'display:flex;flex-direction:column;gap:1.25rem' });
+
+      // STEP 1: Select Pocket
+      if (step === 1) {
+        body.appendChild(PP.el('div', { style: 'font-weight:600;font-size:0.9rem;color:var(--text-muted)' }, ['Select a Pocket to pay from:']));
+        const list = PP.el('div', { style: 'display:flex;flex-direction:column;gap:0.75rem;max-height:360px;overflow-y:auto;padding:2px' });
+        activePockets.forEach(p => {
+          const isSel = p.id == selectedPocketId;
+          const card = PP.el('div', {
+            class: 'glass-card',
+            style: `display:flex;align-items:center;justify-content:space-between;padding:1rem 1.25rem;border-radius:14px;border:${isSel ? '2px solid var(--accent)' : '1px solid var(--border)'};background:${isSel ? 'var(--hover-bg)' : 'var(--surface)'};cursor:pointer;transition:all 0.2s`,
+            onclick: () => { selectedPocketId = p.id; step = 2; render(); }
+          }, [
+            PP.el('div', { style: 'display:flex;align-items:center;gap:1rem' }, [
+              PP.el('div', { style: `width:42px;height:42px;border-radius:12px;background:${p.color || 'var(--accent)'};color:#fff;display:flex;align-items:center;justify-content:center` }, [
+                PP.el('i', { 'data-lucide': p.icon || 'wallet', style: 'width:20px;height:20px' })
+              ]),
+              PP.el('div', {}, [
+                PP.el('div', { style: 'font-weight:700;font-size:1rem;color:var(--text)' }, [p.name]),
+                PP.el('div', { style: 'font-size:0.85rem;color:var(--success);font-weight:600;margin-top:2px' }, [`Available: ₹${PP.fmt(p.current_balance).replace('₹', '')}`])
+              ])
+            ]),
+            PP.el('i', { 'data-lucide': isSel ? 'check-circle-2' : 'chevron-right', style: `color:${isSel ? 'var(--accent)' : 'var(--text-dim)'};width:20px;height:20px` })
+          ]);
+          list.appendChild(card);
+        });
+        body.appendChild(list);
+
+        modal.body.innerHTML = '';
+        modal.body.appendChild(body);
+        modal.footer.innerHTML = '';
+        modal.footer.appendChild(PP.el('button', { class: 'btn btn-ghost', onclick: () => modal.close() }, ['Cancel']));
+        modal.footer.appendChild(PP.el('button', { class: 'btn btn-primary', onclick: () => { step = 2; render(); } }, ['Continue', PP.el('i', { 'data-lucide': 'arrow-right' })]));
+      }
+
+      // STEP 2: Amount & Recipient
+      else if (step === 2) {
+        const pocketHeader = PP.el('div', {
+          class: 'glass-card',
+          style: 'display:flex;align-items:center;justify-content:space-between;padding:0.9rem 1.15rem;border-radius:12px;background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.25)'
+        }, [
+          PP.el('div', { style: 'display:flex;align-items:center;gap:0.75rem' }, [
+            PP.el('div', { style: `width:36px;height:36px;border-radius:10px;background:${pocket.color || 'var(--accent)'};color:#fff;display:flex;align-items:center;justify-content:center` }, [
+              PP.el('i', { 'data-lucide': pocket.icon || 'wallet', style: 'width:18px;height:18px' })
+            ]),
+            PP.el('div', {}, [
+              PP.el('div', { style: 'font-size:0.75rem;color:var(--text-muted);text-transform:uppercase;font-weight:700' }, ['Source Pocket']),
+              PP.el('div', { style: 'font-weight:700;font-size:0.95rem;color:var(--text)' }, [pocket.name])
+            ])
+          ]),
+          PP.el('div', { style: 'text-align:right' }, [
+            PP.el('div', { style: 'font-size:0.75rem;color:var(--text-muted);text-transform:uppercase;font-weight:700' }, ['Available']),
+            PP.el('div', { style: 'font-weight:800;font-size:1.1rem;color:var(--success)' }, [PP.fmt(pocket.current_balance)])
+          ])
+        ]);
+        body.appendChild(pocketHeader);
+
+        const amtGroup = PP.el('div', { class: 'form-group' }, [
+          PP.el('label', { class: 'form-label' }, ['Amount (₹) *']),
+          (() => {
+            const inp = PP.el('input', {
+              class: 'form-input',
+              type: 'number',
+              step: '0.01',
+              placeholder: '₹ 0.00',
+              value: amount > 0 ? amount : '',
+              style: 'font-size:1.4rem;font-weight:700;padding:0.85rem 1rem'
+            });
+            inp.oninput = () => { amount = parseFloat(inp.value) || 0; };
+            setTimeout(() => inp.focus(), 50);
+            return inp;
+          })()
+        ]);
+        body.appendChild(amtGroup);
+
+        const recGroup = PP.el('div', { class: 'form-group' }, [
+          PP.el('label', { class: 'form-label' }, ['Recipient *']),
+          (() => {
+            const inp = PP.el('input', {
+              class: 'form-input',
+              placeholder: 'Recipient Name, UPI ID, or Phone',
+              value: recipient
+            });
+            inp.oninput = () => { recipient = inp.value; };
+            return inp;
+          })()
+        ]);
+        body.appendChild(recGroup);
+
+        const noteGroup = PP.el('div', { class: 'form-group' }, [
+          PP.el('label', { class: 'form-label' }, ['Note (optional)']),
+          (() => {
+            const inp = PP.el('input', {
+              class: 'form-input',
+              placeholder: 'What is this payment for?',
+              value: note
+            });
+            inp.oninput = () => { note = inp.value; };
+            return inp;
+          })()
+        ]);
+        body.appendChild(noteGroup);
+
+        modal.body.innerHTML = '';
+        modal.body.appendChild(body);
+        modal.footer.innerHTML = '';
+        modal.footer.appendChild(PP.el('button', { class: 'btn btn-ghost', onclick: () => { step = 1; render(); } }, [PP.el('i', { 'data-lucide': 'arrow-left' }), 'Change Pocket']));
+        modal.footer.appendChild(PP.el('button', {
+          class: 'btn btn-primary',
+          onclick: () => {
+            if (amount <= 0) return PP.UI.toast('Invalid Amount', 'Please enter a payment amount greater than ₹0.', 'warning');
+            if (amount > available) return PP.UI.toast('Insufficient Funds', `Your ${pocket.name} has only ₹${PP.fmt(available).replace('₹', '')} available.`, 'error');
+            if (!recipient.trim()) return PP.UI.toast('Recipient Required', 'Please enter the recipient name, UPI ID, or phone.', 'warning');
+            step = 3;
+            render();
+          }
+        }, ['Continue', PP.el('i', { 'data-lucide': 'arrow-right' })]));
+      }
+
+      // STEP 3: CONFIRM PAYMENT
+      else if (step === 3) {
+        const remaining = Math.max(0, available - amount);
+
+        const confirmCard = PP.el('div', {
+          class: 'glass-card',
+          style: 'padding:1.5rem;border-radius:16px;border:1.5px solid var(--accent);background:linear-gradient(180deg, rgba(99,102,241,0.06) 0%, var(--surface) 100%);display:flex;flex-direction:column;gap:1.2rem'
+        });
+
+        confirmCard.innerHTML = `
+          <div style="text-align:center;padding-bottom:0.75rem;border-bottom:1px solid var(--border)">
+            <p style="text-transform:uppercase;font-size:0.75rem;letter-spacing:1px;font-weight:700;color:var(--text-muted);margin-bottom:4px">Confirm Payment</p>
+            <h2 style="margin:0;font-size:2.2rem;font-weight:800;color:var(--text)">₹${PP.fmt(amount).replace('₹', '')}</h2>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:0.75rem;font-size:0.9rem">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span style="color:var(--text-muted)">From:</span>
+              <span style="font-weight:700;color:var(--text);display:flex;align-items:center;gap:6px">
+                <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${pocket.color || 'var(--accent)'}"></span>
+                ${pocket.name}
+              </span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span style="color:var(--text-muted)">Available:</span>
+              <span style="font-weight:600;color:var(--text)">₹${PP.fmt(available).replace('₹', '')}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span style="color:var(--text-muted)">Amount:</span>
+              <span style="font-weight:700;color:var(--danger)">- ₹${PP.fmt(amount).replace('₹', '')}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;padding-top:6px;border-top:1px dashed var(--border)">
+              <span style="color:var(--text-muted)">Remaining:</span>
+              <span style="font-weight:800;color:var(--success)">₹${PP.fmt(remaining).replace('₹', '')}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;padding-top:6px;border-top:1px solid var(--border)">
+              <span style="color:var(--text-muted)">To:</span>
+              <span style="font-weight:700;color:var(--text)">${recipient}</span>
+            </div>
+            ${note ? `
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span style="color:var(--text-muted)">Note:</span>
+              <span style="color:var(--text-dim);font-style:italic">${note}</span>
+            </div>` : ''}
+          </div>
+        `;
+        body.appendChild(confirmCard);
+
+        modal.body.innerHTML = '';
+        modal.body.appendChild(body);
+        modal.footer.innerHTML = '';
+        modal.footer.appendChild(PP.el('button', { class: 'btn btn-ghost', onclick: () => { step = 2; render(); } }, ['Cancel']));
+
+        const payBtn = PP.el('button', {
+          class: 'btn btn-danger',
+          style: 'font-weight:700;padding:0.65rem 1.4rem',
+          onclick: async () => {
+            try {
+              const pin = await PP.UI.pinPrompt({
+                title: 'Authorize Pocket Payment',
+                subtitle: `Enter 4-digit PIN to pay ₹${PP.fmt(amount).replace('₹', '')} from ${pocket.name}`
+              });
+              if (!pin) return;
+
+              payBtn.disabled = true;
+              payBtn.innerHTML = '<i data-lucide="loader-2" class="spin"></i> Processing…';
+              PP.refreshIcons();
+
+              const res = await PP.API.post('/api/transactions/pay-pocket', {
+                pocket_id: pocket.id,
+                amount: amount,
+                recipient: recipient,
+                note: note,
+                pin: pin
+              });
+
+              modal.close();
+              PP.UI.showSuccess({
+                title: 'Payment Successful! 🎉',
+                subtitle: `₹${PP.fmt(amount).replace('₹', '')} debited from ${pocket.name}`,
+                qr_code_url: res?.data?.receipt_qr,
+                meta: [
+                  { label: 'Recipient', value: recipient },
+                  { label: 'Source Pocket', value: pocket.name },
+                  { label: 'Amount Paid', value: `₹${PP.fmt(amount).replace('₹', '')}` },
+                  { label: 'Remaining in Pocket', value: `₹${PP.fmt(res?.data?.remaining_balance || remaining).replace('₹', '')}` },
+                  { label: 'Transaction ID', value: res?.data?.transaction_id || 'Completed' }
+                ]
+              });
+
+              opts.onDone?.();
+              PP.emit('transactions:changed');
+              PP.emit('pockets:changed');
+              PP.refreshCurrentView();
+            } catch (err) {
+              if (err.code === 'PAYMENT_APPROVAL_REQUIRED') {
+                const confirmed = await PP.UI.confirm(
+                  '⚠️ High-Value Payment Confirmation',
+                  `Payment of ${PP.fmt(amount)} exceeds your security threshold. Additional confirmation is required. Proceed with transfer?`,
+                  { okLabel: 'Authorize & Pay', okClass: 'btn-danger' }
+                );
+                if (confirmed) {
+                  try {
+                    const retryRes = await PP.API.post('/api/transactions/pay-pocket', {
+                      pocket_id: pocket.id,
+                      amount: amount,
+                      recipient: recipient,
+                      note: note,
+                      pin: pin,
+                      approval_confirmed: true
+                    });
+                    modal.close();
+                    PP.UI.showSuccess({
+                      title: 'Payment Successful! 🎉',
+                      subtitle: `₹${PP.fmt(amount).replace('₹', '')} debited from ${pocket.name}`,
+                      qr_code_url: retryRes?.data?.receipt_qr,
+                      meta: [
+                        { label: 'Recipient', value: recipient },
+                        { label: 'Source Pocket', value: pocket.name },
+                        { label: 'Amount Paid', value: `₹${PP.fmt(amount).replace('₹', '')}` },
+                        { label: 'Remaining in Pocket', value: `₹${PP.fmt(retryRes?.data?.remaining_balance || remaining).replace('₹', '')}` }
+                      ]
+                    });
+                    opts.onDone?.();
+                    PP.emit('transactions:changed');
+                    PP.emit('pockets:changed');
+                    PP.refreshCurrentView();
+                    return;
+                  } catch (retryErr) {
+                    PP.UI.toast('Payment Failed', retryErr.message || 'Payment could not be completed', 'error');
+                  }
+                }
+              } else {
+                PP.UI.toast('Payment Failed', err.message || 'Could not complete pocket payment', 'error');
+              }
+              payBtn.disabled = false;
+              payBtn.innerHTML = '<i data-lucide="lock"></i> Confirm & Pay';
+              PP.refreshIcons();
+            }
+          }
+        }, [PP.el('i', { 'data-lucide': 'lock' }), 'Confirm & Pay']);
+
+        modal.footer.appendChild(payBtn);
+      }
+
+      PP.refreshIcons();
+    };
+
+    render();
+  },
+
+  async payFromBalance(opts = {}) {
+    const user = PP.state.user || {};
+    const walletBal = Number(user.wallet_balance || 0);
+
+    let amount = 0;
+    let recipient = '';
+    let note = '';
+    let step = 1;
+
+    const modal = PP.UI.modal({
+      title: 'Pay from PocketPay Balance',
+      subtitle: `Available: ₹${PP.fmt(walletBal).replace('₹', '')}`,
+      icon: 'wallet',
+      iconClass: 'bg-success',
+      size: 'md'
+    });
+
+    const render = () => {
+      const body = PP.el('div', { style: 'display:flex;flex-direction:column;gap:1.25rem' });
+
+      if (step === 1) {
+        body.appendChild(PP.el('div', { class: 'form-group' }, [
+          PP.el('label', { class: 'form-label' }, ['Amount (₹) *']),
+          (() => {
+            const inp = PP.el('input', {
+              class: 'form-input',
+              type: 'number',
+              step: '0.01',
+              placeholder: '₹ 0.00',
+              value: amount > 0 ? amount : '',
+              style: 'font-size:1.4rem;font-weight:700;padding:0.85rem 1rem'
+            });
+            inp.oninput = () => { amount = parseFloat(inp.value) || 0; };
+            setTimeout(() => inp.focus(), 50);
+            return inp;
+          })()
+        ]));
+
+        body.appendChild(PP.el('div', { class: 'form-group' }, [
+          PP.el('label', { class: 'form-label' }, ['Recipient *']),
+          (() => {
+            const inp = PP.el('input', {
+              class: 'form-input',
+              placeholder: 'Recipient Name, UPI ID, or Phone',
+              value: recipient
+            });
+            inp.oninput = () => { recipient = inp.value; };
+            return inp;
+          })()
+        ]));
+
+        body.appendChild(PP.el('div', { class: 'form-group' }, [
+          PP.el('label', { class: 'form-label' }, ['Note (optional)']),
+          (() => {
+            const inp = PP.el('input', {
+              class: 'form-input',
+              placeholder: 'Payment description',
+              value: note
+            });
+            inp.oninput = () => { note = inp.value; };
+            return inp;
+          })()
+        ]));
+
+        modal.body.innerHTML = '';
+        modal.body.appendChild(body);
+        modal.footer.innerHTML = '';
+        modal.footer.appendChild(PP.el('button', { class: 'btn btn-ghost', onclick: () => modal.close() }, ['Cancel']));
+        modal.footer.appendChild(PP.el('button', {
+          class: 'btn btn-primary',
+          onclick: () => {
+            if (amount <= 0) return PP.UI.toast('Invalid Amount', 'Please enter a valid payment amount.', 'warning');
+            if (amount > walletBal) return PP.UI.toast('Insufficient Balance', `You only have ₹${PP.fmt(walletBal).replace('₹', '')} in your PocketPay balance.`, 'error');
+            if (!recipient.trim()) return PP.UI.toast('Recipient Required', 'Please enter the recipient.', 'warning');
+            step = 2;
+            render();
+          }
+        }, ['Continue', PP.el('i', { 'data-lucide': 'arrow-right' })]));
+      } else {
+        const remaining = Math.max(0, walletBal - amount);
+        const confirmCard = PP.el('div', {
+          class: 'glass-card',
+          style: 'padding:1.5rem;border-radius:16px;border:1.5px solid var(--accent);background:linear-gradient(180deg, rgba(99,102,241,0.06) 0%, var(--surface) 100%);display:flex;flex-direction:column;gap:1.2rem'
+        });
+
+        confirmCard.innerHTML = `
+          <div style="text-align:center;padding-bottom:0.75rem;border-bottom:1px solid var(--border)">
+            <p style="text-transform:uppercase;font-size:0.75rem;letter-spacing:1px;font-weight:700;color:var(--text-muted);margin-bottom:4px">Confirm Payment</p>
+            <h2 style="margin:0;font-size:2.2rem;font-weight:800;color:var(--text)">₹${PP.fmt(amount).replace('₹', '')}</h2>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:0.75rem;font-size:0.9rem">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span style="color:var(--text-muted)">From:</span>
+              <span style="font-weight:700;color:var(--text)">PocketPay Available Balance</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span style="color:var(--text-muted)">Available:</span>
+              <span style="font-weight:600;color:var(--text)">₹${PP.fmt(walletBal).replace('₹', '')}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span style="color:var(--text-muted)">Amount:</span>
+              <span style="font-weight:700;color:var(--danger)">- ₹${PP.fmt(amount).replace('₹', '')}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;padding-top:6px;border-top:1px dashed var(--border)">
+              <span style="color:var(--text-muted)">Remaining:</span>
+              <span style="font-weight:800;color:var(--success)">₹${PP.fmt(remaining).replace('₹', '')}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;padding-top:6px;border-top:1px solid var(--border)">
+              <span style="color:var(--text-muted)">To:</span>
+              <span style="font-weight:700;color:var(--text)">${recipient}</span>
+            </div>
+          </div>
+        `;
+        body.appendChild(confirmCard);
+
+        modal.body.innerHTML = '';
+        modal.body.appendChild(body);
+        modal.footer.innerHTML = '';
+        modal.footer.appendChild(PP.el('button', { class: 'btn btn-ghost', onclick: () => { step = 1; render(); } }, ['Cancel']));
+
+        const payBtn = PP.el('button', {
+          class: 'btn btn-danger',
+          style: 'font-weight:700',
+          onclick: async () => {
+            try {
+              const pin = await PP.UI.pinPrompt({
+                title: 'Authorize Payment',
+                subtitle: `Enter PIN to pay ₹${PP.fmt(amount).replace('₹', '')}`
+              });
+              if (!pin) return;
+
+              payBtn.disabled = true;
+              payBtn.innerHTML = '<i data-lucide="loader-2" class="spin"></i> Processing…';
+              PP.refreshIcons();
+
+              const res = await PP.API.post('/api/transactions/pay-balance', {
+                amount: amount,
+                recipient: recipient,
+                note: note,
+                pin: pin
+              });
+
+              modal.close();
+              PP.UI.showSuccess({
+                title: 'Payment Successful! 🎉',
+                subtitle: `₹${PP.fmt(amount).replace('₹', '')} paid from PocketPay Balance`,
+                qr_code_url: res?.data?.receipt_qr,
+                meta: [
+                  { label: 'Recipient', value: recipient },
+                  { label: 'Amount', value: `₹${PP.fmt(amount).replace('₹', '')}` },
+                  { label: 'Remaining Balance', value: `₹${PP.fmt(res?.data?.remaining_balance || remaining).replace('₹', '')}` }
+                ]
+              });
+
+              opts.onDone?.();
+              PP.emit('transactions:changed');
+              PP.refreshCurrentView();
+            } catch (err) {
+              if (err.code === 'PAYMENT_APPROVAL_REQUIRED') {
+                const confirmed = await PP.UI.confirm(
+                  '⚠️ High-Value Payment Confirmation',
+                  `Payment of ${PP.fmt(amount)} exceeds your security threshold. Additional confirmation is required. Proceed with transfer?`,
+                  { okLabel: 'Authorize & Pay', okClass: 'btn-danger' }
+                );
+                if (confirmed) {
+                  try {
+                    const retryRes = await PP.API.post('/api/transactions/pay-balance', {
+                      amount: amount,
+                      recipient: recipient,
+                      note: note,
+                      pin: pin,
+                      approval_confirmed: true
+                    });
+                    modal.close();
+                    PP.UI.showSuccess({
+                      title: 'Payment Successful! 🎉',
+                      subtitle: `₹${PP.fmt(amount).replace('₹', '')} paid from PocketPay Balance`,
+                      qr_code_url: retryRes?.data?.receipt_qr,
+                      meta: [
+                        { label: 'Recipient', value: recipient },
+                        { label: 'Amount', value: `₹${PP.fmt(amount).replace('₹', '')}` },
+                        { label: 'Remaining Balance', value: `₹${PP.fmt(retryRes?.data?.remaining_balance || remaining).replace('₹', '')}` }
+                      ]
+                    });
+                    opts.onDone?.();
+                    PP.emit('transactions:changed');
+                    PP.refreshCurrentView();
+                    return;
+                  } catch (retryErr) {
+                    PP.UI.toast('Payment Failed', retryErr.message || 'Payment could not be completed', 'error');
+                  }
+                }
+              } else {
+                PP.UI.toast('Payment Failed', err.message || 'Could not complete payment', 'error');
+              }
+              payBtn.disabled = false;
+              payBtn.innerHTML = '<i data-lucide="lock"></i> Confirm & Pay';
+              PP.refreshIcons();
+            }
+          }
+        }, [PP.el('i', { 'data-lucide': 'lock' }), 'Confirm & Pay']);
+
+        modal.footer.appendChild(payBtn);
+      }
+      PP.refreshIcons();
+    };
+
+    render();
+  },
+
   async addExpense(preselectedPocketId = null, opts = {}) {
+    if (!preselectedPocketId) {
+      return PP.Modals.openPaymentHub(opts);
+    }
+    return PP.Modals.payFromPocket(preselectedPocketId, opts);
+  },
+
+  async legacyAddExpense(preselectedPocketId = null, opts = {}) {
     const pockets = await PP.PocketsAPI.list({ per_page: 200 }).then(r => r.data.items).catch(() => PP.state.pockets || []) || [];
     PP.state.pockets = pockets;
     const categories = PP.state.categories?.length ? PP.state.categories : await PP.WalletAPI.categories().then(r => r.data.categories).catch(() => []) || [];
@@ -720,7 +1416,21 @@ PP.Modals = {
               pin2 = entered.join('');
               if (pin1 !== pin2) { PP.UI.toast('PINs do not match', 'Please try again', 'error'); step = 1; pin1 = ''; entered = []; renderBody(); }
               else {
-                try { await PP.Auth.setupPin(pin1, pin2); PP.UI.toast('PIN set', 'Your transaction PIN has been configured', 'success'); modal.close(); PP.state.user = (await PP.Auth.me()).data.user; PP.refreshUserChrome(); }
+                try {
+                  if (PP.Auth.completeSecuritySetup) {
+                    await PP.Auth.completeSecuritySetup(pin1, pin2);
+                  } else {
+                    await PP.Auth.setupPin(pin1, pin2);
+                  }
+                  PP.UI.toast('Security Setup Complete', 'Your 4-digit transaction PIN has been successfully configured.', 'success');
+                  modal.close();
+                  const meRes = await PP.Auth.me();
+                  if (meRes?.data?.user) {
+                    PP.state.user = meRes.data.user;
+                  }
+                  PP.refreshUserChrome();
+                  PP.refreshCurrentView();
+                }
                 catch (e) { PP.UI.toast('PIN setup failed', e.message, 'error'); }
               }
             }
@@ -1574,8 +2284,11 @@ PP.Modals = {
       ]),
     ]);
     body.appendChild(row('Date & Time', PP.formatDateTime(tx.created_at || tx.date)));
-    body.appendChild(row('Category', tx.category || '—'));
+    body.appendChild(row('Type', isExp ? 'DEBIT' : (tx.type || 'Transaction').toUpperCase()));
+    body.appendChild(row('Status', (tx.status === 'completed' || tx.status === 'success') ? 'SUCCESS' : (tx.status || '').toUpperCase()));
     if (tx.merchant) body.appendChild(row('Merchant', tx.merchant));
+    if (tx.reference_id || tx.extra_data?.booking_id) body.appendChild(row('Booking ID', tx.reference_id || tx.extra_data?.booking_id, true));
+    body.appendChild(row('Category', tx.category || '—'));
     if (tx.from_pocket_name || tx.from_pocket_id) body.appendChild(row('From', tx.from_pocket_name || `Pocket #${tx.from_pocket_id}`));
     if (tx.to_pocket_name || tx.to_pocket_id) body.appendChild(row('To', tx.to_pocket_name || `Pocket #${tx.to_pocket_id}`));
     if (tx.payment_method) body.appendChild(row('Method', tx.payment_method));
@@ -2033,6 +2746,25 @@ PP.Modals = {
       { label: 'Edit Pocket Details', sub: 'Change name, budget, icon, or color', icon: 'pencil', color: 'var(--text-muted)', fn: () => { modal.close(); PP.Modals.createPocket(pocket); } },
       { label: 'Delete Pocket', sub: 'Remove pocket (returns funds if remaining)', icon: 'trash-2', color: 'var(--danger)', fn: () => { modal.close(); PP.Modals.deletePocket(pocket); } },
     ];
+    if ((pocket.locked_goal_amount && pocket.current_balance >= pocket.locked_goal_amount) || pocket.is_goal_met || (pocket.is_currently_locked && pocket.current_balance > 0)) {
+      items.unshift({
+        label: '🎉 Goal Reached — Release to Balance',
+        sub: `Unlock pocket and release ${PP.fmt(pocket.current_balance)} to your available balance`,
+        icon: 'gift',
+        color: 'var(--success)',
+        fn: async () => {
+          modal.close();
+          try {
+            const res = await PP.PocketsAPI.releaseGoal(pocket.id);
+            PP.UI.toast('🎉 Goal Released!', `₹${Number(res.released_amount || pocket.current_balance).toLocaleString('en-IN')} added to your available balance!`, 'success');
+            await PP.loadState?.();
+            PP.renderView?.();
+          } catch (err) {
+            PP.UI.toast('Release Failed', err.message || 'Could not release pocket goal', 'error');
+          }
+        }
+      });
+    }
     items.forEach(it => {
       body.appendChild(PP.el('button', {
         class: 'btn btn-outline',
@@ -2257,7 +2989,9 @@ PP.Modals = {
         const res = await PP.QRAPI.resolve(rawString);
         modal.close();
 
-        if (res?.type === 'user' && res.user) {
+        if (res?.type === 'merchant_payment' && res.payment_request) {
+          PP.Modals.confirmTravelEasePayment(res.payment_request);
+        } else if (res?.type === 'user' && res.user) {
           PP.Modals.sendMoney({
             recipient: res.user.virtual_upi_id || res.user.virtual_wallet_id || res.user.email,
             resolvedUser: res.user
@@ -2286,7 +3020,7 @@ PP.Modals = {
       }
     };
 
-    // Photo upload listener
+    // Photo upload listener with universal jsQR decoder
     fileInput.onchange = async (e) => {
       const file = e.target.files?.[0];
       if (!file) return;
@@ -2299,6 +3033,25 @@ PP.Modals = {
         const ctx = canvasEl.getContext('2d');
         ctx.drawImage(img, 0, 0);
 
+        // 1. Try jsQR decode from image canvas
+        if (typeof jsQR === 'function') {
+          try {
+            const imgData = ctx.getImageData(0, 0, img.width, img.height);
+            const qrCode = jsQR(imgData.data, imgData.width, imgData.height, {
+              inversionAttempts: 'dontInvert'
+            }) || jsQR(imgData.data, imgData.width, imgData.height, {
+              inversionAttempts: 'onlyInvert'
+            });
+            if (qrCode && qrCode.data) {
+              await handleQrDetected(qrCode.data);
+              return;
+            }
+          } catch (e) {
+            console.warn('jsQR image decode error:', e);
+          }
+        }
+
+        // 2. Try native BarcodeDetector if available
         if ('BarcodeDetector' in window) {
           try {
             const detector = new BarcodeDetector({ formats: ['qr_code'] });
@@ -2338,16 +3091,42 @@ PP.Modals = {
           try { detector = new BarcodeDetector({ formats: ['qr_code'] }); } catch {}
         }
 
+        const scanCanvas = document.createElement('canvas');
+        const scanCtx = scanCanvas.getContext('2d', { willReadFrequently: true });
+
         const scanLoop = async () => {
           if (!videoStream || isProcessing) return;
-          if (videoEl.readyState >= videoEl.HAVE_CURRENT_DATA && detector) {
-            try {
-              const barcodes = await detector.detect(videoEl);
-              if (barcodes.length > 0 && barcodes[0].rawValue) {
-                await handleQrDetected(barcodes[0].rawValue);
-                return;
-              }
-            } catch {}
+          if (videoEl.readyState >= videoEl.HAVE_CURRENT_DATA) {
+            const vw = videoEl.videoWidth || 640;
+            const vh = videoEl.videoHeight || 480;
+
+            // 1. Scan with jsQR
+            if (typeof jsQR === 'function' && vw > 0 && vh > 0) {
+              try {
+                scanCanvas.width = vw;
+                scanCanvas.height = vh;
+                scanCtx.drawImage(videoEl, 0, 0, vw, vh);
+                const frameData = scanCtx.getImageData(0, 0, vw, vh);
+                const code = jsQR(frameData.data, frameData.width, frameData.height, {
+                  inversionAttempts: 'dontInvert'
+                });
+                if (code && code.data) {
+                  await handleQrDetected(code.data);
+                  return;
+                }
+              } catch (e) {}
+            }
+
+            // 2. Secondary fallback: native BarcodeDetector
+            if (detector) {
+              try {
+                const barcodes = await detector.detect(videoEl);
+                if (barcodes.length > 0 && barcodes[0].rawValue) {
+                  await handleQrDetected(barcodes[0].rawValue);
+                  return;
+                }
+              } catch {}
+            }
           }
           scanAnimFrame = requestAnimationFrame(scanLoop);
         };
@@ -2383,8 +3162,9 @@ PP.Modals = {
     const u = PP.state.user || {};
     const walletId = u.virtual_wallet_id || `PPW${u.id || '001'}`;
     const upiId = u.virtual_upi_id || `${(u.email || 'user').split('@')[0]}@pocketpay`;
-    const userUrl = `https://pocketpay-1.onrender.com/qr/user/${walletId}`;
-    const qrImgUrl = `/api/qr?content=${encodeURIComponent(userUrl)}&size=300`;
+    const fullName = u.full_name || 'PocketPay User';
+    const upiUri = `upi://pay?pa=${upiId}&pn=${encodeURIComponent(fullName)}&cu=INR`;
+    const qrImgUrl = `/api/qr?content=${encodeURIComponent(upiUri)}&size=300`;
 
     const modal = PP.UI.modal({
       title: 'My Profile QR',
@@ -4539,8 +5319,14 @@ PP.Modals = {
         try {
           submitBtn.disabled = true;
           submitBtn.textContent = 'Depositing...';
-          await PP.GoalsAPI.deposit(goal.id, amt, sourceVal);
-          PP.UI.toast('Deposit Success', `₹${amt.toLocaleString('en-IN')} deposited to "${goal.name}"`, 'success');
+          const res = await PP.GoalsAPI.deposit(goal.id, amt, sourceVal);
+          const isCompleted = res?.goal_completed || res?.data?.goal_completed;
+          const releasedAmt = res?.released_amount || res?.data?.released_amount || (goal.current_amount + amt);
+          if (isCompleted) {
+            PP.UI.toast('🎉 Goal Completed!', `Target reached! ₹${Number(releasedAmt).toLocaleString('en-IN')} has been released to your available balance.`, 'success');
+          } else {
+            PP.UI.toast('Deposit Success', `₹${amt.toLocaleString('en-IN')} deposited to "${goal.name}"`, 'success');
+          }
           modal.close();
           await PP.loadState?.();
           PP.renderView?.();
@@ -5015,13 +5801,307 @@ PP.Modals = {
     }
 
     PP.refreshIcons();
-  }
+  },
+
+  // =========================================================================
+  // TRAVELEASE & MERCHANT QR PAYMENT CONFIRMATION FLOW
+  // =========================================================================
+  confirmTravelEasePayment(pr) {
+    if (!pr) return;
+    const reqId = pr.request_id || pr.payment_request_id;
+    const merchant = pr.merchant || 'TravelEase';
+    const bookingId = pr.booking_id || '';
+    const reference = pr.reference || bookingId;
+    const rawType = (pr.booking_type || 'flight').toLowerCase();
+    const currency = pr.currency || 'INR';
+    const amount = Number(pr.amount || 0);
+
+    const typeConfigs = {
+      flight: { icon: 'plane', label: 'Flight Booking', color: '#0284c7', badge: 'info' },
+      train: { icon: 'train', label: 'Train Booking', color: '#d97706', badge: 'warning' },
+      bus: { icon: 'bus', label: 'Bus Booking', color: '#16a34a', badge: 'success' },
+      cab: { icon: 'car', label: 'Cab Booking', color: '#eab308', badge: 'accent' },
+      hotel: { icon: 'building-2', label: 'Hotel Booking', color: '#9333ea', badge: 'primary' },
+      package: { icon: 'package', label: 'Holiday Package', color: '#0d9488', badge: 'secondary' }
+    };
+    const cfg = typeConfigs[rawType] || typeConfigs.flight;
+
+    const userBal = Number(PP.state.user?.wallet_balance || 0);
+    const hasEnough = userBal >= amount;
+    const shortfall = Math.max(0, amount - userBal);
+
+    const modal = PP.UI.modal({
+      title: `${merchant} ${cfg.label}`,
+      subtitle: `Booking Reference: ${reference}`,
+      icon: cfg.icon,
+      iconClass: 'bg-accent',
+      size: 'md'
+    });
+
+    const body = PP.el('div', { style: 'display:flex;flex-direction:column;gap:1.25rem' });
+
+    // Payment Card
+    const card = PP.el('div', {
+      class: 'glass-card',
+      style: 'padding:1.5rem;text-align:center;border:1px solid rgba(99,102,241,0.3);background:linear-gradient(180deg,rgba(99,102,241,0.1) 0%,rgba(0,0,0,0.2) 100%)'
+    });
+    card.innerHTML = `
+      <div style="font-size:0.8rem;text-transform:uppercase;letter-spacing:0.1em;font-weight:700;color:var(--accent);margin-bottom:0.4rem">
+        Amount to Pay
+      </div>
+      <div style="font-family:var(--font-display);font-size:2.5rem;font-weight:900;color:#fff;margin-bottom:0.75rem">
+        ₹${amount.toLocaleString('en-IN', {minimumFractionDigits: 2})}
+      </div>
+      <div style="display:flex;gap:6px;justify-content:center;align-items:center">
+        <span class="chip ${cfg.badge}" style="font-size:0.75rem">
+          <i data-lucide="${cfg.icon}" style="width:12px;height:12px;margin-right:4px"></i> ${cfg.label}
+        </span>
+        <span class="chip success" style="font-size:0.75rem">
+          <i data-lucide="shield-check" style="width:12px;height:12px;margin-right:4px"></i> Backend Verified
+        </span>
+      </div>
+    `;
+    body.appendChild(card);
+
+    // Detail breakdown - Shows: TravelEase, Booking ID, Booking Type, Amount, Currency, Reference
+    const details = PP.el('div', {
+      class: 'glass-card',
+      style: 'padding:1rem;display:flex;flex-direction:column;gap:0.6rem;font-size:0.85rem'
+    });
+    details.innerHTML = `
+      <div style="display:flex;justify-content:space-between;color:var(--text-muted)">
+        <span>Merchant</span>
+        <strong style="color:var(--text)">${merchant}</strong>
+      </div>
+      <div style="display:flex;justify-content:space-between;color:var(--text-muted)">
+        <span>Booking ID</span>
+        <strong style="color:var(--text);font-family:monospace">${bookingId}</strong>
+      </div>
+      <div style="display:flex;justify-content:space-between;color:var(--text-muted)">
+        <span>Booking Type</span>
+        <span class="chip ${cfg.badge}" style="font-size:0.72rem;padding:2px 8px">${cfg.label}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;color:var(--text-muted)">
+        <span>Reference</span>
+        <strong style="color:var(--accent);font-family:monospace">${reference}</strong>
+      </div>
+      <div style="display:flex;justify-content:space-between;color:var(--text-muted)">
+        <span>Amount & Currency</span>
+        <strong style="color:#fff">₹${amount.toLocaleString('en-IN', {minimumFractionDigits: 2})} (${currency})</strong>
+      </div>
+      <div style="display:flex;justify-content:space-between;color:var(--text-muted);border-top:1px solid rgba(255,255,255,0.08);padding-top:0.6rem">
+        <span>Available Wallet Balance</span>
+        <strong style="color:${hasEnough ? 'var(--success)' : 'var(--danger)'}">₹${userBal.toLocaleString('en-IN', {minimumFractionDigits: 2})}</strong>
+      </div>
+    `;
+    body.appendChild(details);
+
+    if (!hasEnough) {
+      const warn = PP.el('div', {
+        class: 'alert alert-danger',
+        style: 'font-size:0.82rem;padding:0.75rem 1rem;border-radius:10px;background:rgba(239,68,68,0.15);border:1px solid #ef4444;color:#fca5a5'
+      }, [`Insufficient PocketPay balance. You are short by ₹${shortfall.toLocaleString('en-IN', {minimumFractionDigits: 2})}. Please top up your wallet.`]);
+      body.appendChild(warn);
+    }
+
+    const promptText = PP.el('div', {
+      style: 'text-align:center;font-size:0.95rem;font-weight:600;color:var(--text)'
+    }, [`Confirm payment of ₹${amount.toLocaleString('en-IN', {minimumFractionDigits: 2})} to ${merchant}?`]);
+    body.appendChild(promptText);
+
+    modal.body.innerHTML = '';
+    modal.body.appendChild(body);
+
+    modal.footer.innerHTML = '';
+    const cancelBtn = PP.el('button', { class: 'btn btn-ghost', onclick: () => modal.close() }, ['Cancel']);
+    let isSubmitting = false;
+    const confirmBtn = PP.el('button', {
+      class: 'btn btn-primary',
+      disabled: !hasEnough,
+      style: 'font-weight:700',
+      onclick: async () => {
+        if (isSubmitting) return; // Prevent double click
+        isSubmitting = true;
+        confirmBtn.disabled = true;
+        confirmBtn.innerHTML = '<i class="spin" data-lucide="loader-2"></i> Sending OTP...';
+        try {
+          const otpResp = await PP.API.post('/api/v1/payments/request-otp-for-request', {
+            payment_request_id: reqId,
+            identifier: PP.state.user?.virtual_wallet_id || PP.state.user?.email
+          });
+
+          modal.close();
+          PP.Modals.promptOtpForPayment({
+            payment_request_id: reqId,
+            merchant: merchant,
+            booking_id: bookingId,
+            booking_type: rawType,
+            reference: reference,
+            amount: amount,
+            currency: currency,
+            masked_destination: otpResp?.masked_destination || 'your registered email'
+          });
+        } catch (e) {
+          isSubmitting = false;
+          confirmBtn.disabled = false;
+          confirmBtn.textContent = 'Confirm Payment';
+          PP.UI.toast('OTP Error', e.message || 'Could not request OTP', 'error');
+        }
+      }
+    }, ['Confirm Payment']);
+
+    modal.footer.append(cancelBtn, confirmBtn);
+    PP.refreshIcons();
+  },
+
+  promptOtpForPayment(opts) {
+    const modal = PP.UI.modal({
+      title: 'Enter Verification OTP',
+      subtitle: `Payment of ₹${opts.amount.toLocaleString('en-IN', {minimumFractionDigits: 2})} to ${opts.merchant}`,
+      icon: 'key',
+      iconClass: 'bg-accent',
+      size: 'sm'
+    });
+
+    const body = PP.el('div', { style: 'display:flex;flex-direction:column;gap:1rem;text-align:center' });
+    body.innerHTML = `
+      <p style="font-size:0.82rem;color:var(--text-muted);margin:0">
+        Enter the 6-digit OTP sent to <strong>${opts.masked_destination}</strong>
+      </p>
+      <input type="text" id="ppPaymentOtpInput" maxlength="6" class="form-input" 
+             placeholder="······" 
+             style="text-align:center;font-family:monospace;font-size:1.75rem;letter-spacing:10px;font-weight:800;padding:12px;" />
+      <div style="font-size:0.72rem;color:var(--text-dim)">
+        <i data-lucide="shield-check" style="width:12px;height:12px;color:var(--success)"></i> Zero banking passwords or PINs requested.
+      </div>
+    `;
+
+    modal.body.innerHTML = '';
+    modal.body.appendChild(body);
+
+    modal.footer.innerHTML = '';
+    const cancelBtn = PP.el('button', { class: 'btn btn-ghost', onclick: () => modal.close() }, ['Cancel']);
+    let isAuthorizing = false;
+    const payBtn = PP.el('button', {
+      class: 'btn btn-primary',
+      style: 'font-weight:700',
+      onclick: async () => {
+        if (isAuthorizing) return; // Prevent double click
+        const inp = document.getElementById('ppPaymentOtpInput');
+        const otp = (inp?.value || '').trim();
+        if (!otp || otp.length < 4) {
+          return PP.UI.toast('OTP Required', 'Please enter the 6-digit verification code', 'warning');
+        }
+
+        isAuthorizing = true;
+        payBtn.disabled = true;
+        payBtn.innerHTML = '<i class="spin" data-lucide="loader-2"></i> Authorizing Debit...';
+
+        try {
+          const res = await PP.API.post('/api/v1/payments/pay-request', {
+            payment_request_id: opts.payment_request_id,
+            otp: otp,
+            identifier: PP.state.user?.virtual_wallet_id || PP.state.user?.email
+          });
+
+          if (res?.success) {
+            modal.close();
+            if (res.new_balance !== undefined && PP.state.user) {
+              PP.state.user.wallet_balance = res.new_balance;
+            }
+            PP.UI.toast('Payment Successful', `₹${opts.amount.toLocaleString('en-IN', {minimumFractionDigits: 2})} paid to ${opts.merchant}`, 'success');
+            
+            PP.Modals.showTravelEaseReceipt({
+              transaction_id: res.transaction_id,
+              booking_id: opts.booking_id,
+              booking_type: opts.booking_type || res.booking_type,
+              reference: opts.reference || res.reference,
+              merchant: opts.merchant,
+              amount: opts.amount,
+              new_balance: res.new_balance
+            });
+
+            PP.refreshCurrentView();
+          } else {
+            throw new Error(res?.message || 'Payment authorization rejected');
+          }
+        } catch (err) {
+          isAuthorizing = false;
+          payBtn.disabled = false;
+          payBtn.textContent = 'Verify & Authorize Payment';
+          PP.UI.toast('Payment Failed', err.message || 'Invalid OTP or authorization error', 'error');
+        }
+      }
+    }, ['Verify & Authorize Payment']);
+
+    modal.footer.append(cancelBtn, payBtn);
+    PP.refreshIcons();
+    setTimeout(() => document.getElementById('ppPaymentOtpInput')?.focus(), 150);
+  },
+
+  showTravelEaseReceipt(data) {
+    const modal = PP.UI.modal({
+      title: 'Payment Successful',
+      subtitle: `Transaction #${data.transaction_id}`,
+      icon: 'check-circle-2',
+      iconClass: 'bg-success',
+      size: 'md'
+    });
+    const body = PP.el('div', { style: 'display:flex;flex-direction:column;gap:1rem' });
+    const bType = (data.booking_type || 'flight').toUpperCase();
+    body.innerHTML = `
+      <div class="glass-card" style="padding:1.5rem;text-align:center;border:1px solid rgba(16,185,129,0.3);background:linear-gradient(180deg,rgba(16,185,129,0.1) 0%,rgba(0,0,0,0.2) 100%)">
+        <div style="font-size:0.75rem;text-transform:uppercase;font-weight:700;color:var(--success);letter-spacing:0.1em;margin-bottom:0.3rem">
+          DEBIT SUCCESSFUL
+        </div>
+        <div style="font-family:var(--font-display);font-size:2.25rem;font-weight:900;color:#fff;margin-bottom:0.5rem">
+          -₹${Number(data.amount).toLocaleString('en-IN', {minimumFractionDigits: 2})}
+        </div>
+        <div class="chip success">SUCCESS</div>
+      </div>
+      <div class="glass-card" style="padding:1rem;display:flex;flex-direction:column;gap:0.6rem;font-size:0.85rem">
+        <div style="display:flex;justify-content:space-between;color:var(--text-muted)">
+          <span>Merchant</span>
+          <strong style="color:var(--text)">${data.merchant || 'TravelEase'}</strong>
+        </div>
+        <div style="display:flex;justify-content:space-between;color:var(--text-muted)">
+          <span>Booking Reference</span>
+          <strong style="color:var(--text);font-family:monospace">${data.reference || data.booking_id}</strong>
+        </div>
+        <div style="display:flex;justify-content:space-between;color:var(--text-muted)">
+          <span>Booking Type</span>
+          <span class="chip primary" style="font-size:0.72rem;padding:2px 8px">${bType}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;color:var(--text-muted)">
+          <span>PocketPay Transaction ID</span>
+          <strong style="color:var(--text);font-family:monospace">${data.transaction_id}</strong>
+        </div>
+        <div style="display:flex;justify-content:space-between;color:var(--text-muted)">
+          <span>Payment Status</span>
+          <strong style="color:var(--success)">CONFIRMED / SUCCESS</strong>
+        </div>
+        <div style="display:flex;justify-content:space-between;color:var(--text-muted)">
+          <span>Updated Wallet Balance</span>
+          <strong style="color:var(--accent)">₹${Number(data.new_balance || 0).toLocaleString('en-IN', {minimumFractionDigits: 2})}</strong>
+        </div>
+      </div>
+    `;
+    modal.body.innerHTML = '';
+    modal.body.appendChild(body);
+    modal.footer.innerHTML = '';
+    modal.footer.appendChild(PP.el('button', {
+      class: 'btn btn-primary btn-block',
+      onclick: () => { modal.close(); PP.navigate('transactions'); }
+    }, ['View in Transactions']));
+    PP.refreshIcons();
+  },
 };
 
 
 
 // Backward compatibility aliases
 PP.Modals.setupPIN = PP.Modals.setupPin;
+PP.Modals.securitySetup = PP.Modals.setupPin;
 PP.Modals.changePIN = PP.Modals.changePin;
 PP.Modals.saveRule = PP.Modals.saveDistributionRule;
 

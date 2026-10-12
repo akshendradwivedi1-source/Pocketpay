@@ -13,11 +13,13 @@ services:
     plan: free
     region: oregon
     branch: main
-    buildCommand: "pip install -r requirements.txt && (flask db upgrade || true)"
+    buildCommand: "pip install -r requirements.txt"
     startCommand: "gunicorn wsgi:app --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 120"
     healthCheckPath: /health
     autoDeploy: true
     envVars:
+      - key: FLASK_APP
+        value: wsgi.py
       - key: FLASK_ENV
         value: production
       - key: PYTHON_VERSION
@@ -29,6 +31,10 @@ services:
           name: pocketpay-db
           property: connectionString
       - key: POCKETPAY_ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
         sync: false
       - key: OPENAI_API_KEY
         sync: false

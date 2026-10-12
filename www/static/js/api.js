@@ -45,7 +45,9 @@ PP.API = {
   delete(u, body) { return this.request(u, { method: 'DELETE', body }); },
 };
 
-// ========== Auth ==========
+PP.api = (u, method = 'GET', body = null) => {
+  return PP.API.request(u, { method: (method || 'GET').toUpperCase(), body });
+};
 PP.Auth = {
   async login(email, password, remember = false) {
     return PP.API.post('/auth/login', { email, password, remember });
@@ -103,6 +105,9 @@ PP.Auth = {
   },
   async setupPin(pin, confirm_pin) {
     return PP.API.post('/auth/setup-pin', { pin, confirm_pin });
+  },
+  async completeSecuritySetup(pin, confirm_pin) {
+    return PP.API.post('/auth/complete-security-setup', { pin, confirm_pin });
   },
   async changePin(old_pin, new_pin) {
     return PP.API.post('/auth/change-pin', { old_pin, new_pin });
@@ -732,6 +737,7 @@ PP.PocketsAPI = {
   transactions(id, params = {}) { return PP.API.get(`/api/pockets/${id}/transactions`, params); },
   qr(id) { return PP.API.get(`/api/pockets/${id}/qr`); },
   lookup(ref) { return PP.API.get(`/api/pockets/lookup/${encodeURIComponent(ref)}`); },
+  releaseGoal(id) { return PP.API.post(`/api/pockets/${id}/release-goal`, {}); },
 };
 
 // ========== Transactions ==========
@@ -786,6 +792,7 @@ PP.AnalyticsAPI = {
 PP.PayoutsAPI = {
   banksList() { return PP.API.get('/api/payouts/banks-list'); },
   beneficiaries() { return PP.API.get('/api/payouts/beneficiaries'); },
+  validateBeneficiary(payload) { return PP.API.post('/api/payouts/validate-beneficiary', payload); },
   parseQR(qr_string) { return PP.API.post('/api/payouts/parse-qr', { qr_string }); },
   payQR(payload) {
     const pin = payload.pin;
@@ -815,6 +822,7 @@ PP.GoalsAPI = {
   update(id, payload) { return PP.API.put(`/api/analytics/goals/${id}`, payload); },
   deposit(id, amount, source = 'wallet') { return PP.API.post(`/api/analytics/goals/${id}/deposit`, { amount, source }); },
   withdraw(id, amount) { return PP.API.post(`/api/analytics/goals/${id}/withdraw`, { amount }); },
+  release(id) { return PP.API.post(`/api/analytics/goals/${id}/release`, {}); },
   delete(id) { return PP.API.delete(`/api/analytics/goals/${id}`); },
 };
 
@@ -832,6 +840,52 @@ PP.QRAPI = {
   getTransaction(ref) {
     return PP.API.get(`/qr/api/transaction/${encodeURIComponent(ref)}`);
   }
+};
+
+// ========== PocketPay Premium Suite API ==========
+PP.PremiumAPI = {
+  getStatus() { return PP.API.get('/api/premium/status'); },
+  getPlans() { return PP.API.get('/api/premium/plans'); },
+  createCheckoutOrder(plan_id = 'monthly') {
+    return PP.API.post('/api/premium/create-checkout-order', { plan_id });
+  },
+  verifyPayment(payload) {
+    return PP.API.post('/api/premium/verify-payment', payload);
+  },
+  initiatePocketPay(payload) {
+    return PP.API.post('/api/premium/pocketpay/initiate', payload);
+  },
+  confirmPocketPay(payload) {
+    return PP.API.post('/api/premium/pocketpay/confirm', payload);
+  },
+  cancel() {
+    return PP.API.post('/api/premium/cancel', {});
+  },
+  // Rules
+  getRules() { return PP.API.get('/api/premium/rules'); },
+  createRule(payload) { return PP.API.post('/api/premium/rules', payload); },
+  updateRule(id, payload) { return PP.API.put(`/api/premium/rules/${id}`, payload); },
+  deleteRule(id) { return PP.API.delete(`/api/premium/rules/${id}`); },
+  toggleRule(id, is_active) { return PP.API.post(`/api/premium/rules/${id}/toggle`, { is_active }); },
+  getRuleHistory(rule_id) { return PP.API.get('/api/premium/rules/history', rule_id ? { rule_id } : undefined); },
+  // Pocket Lock
+  lockPocket(pocket_id, payload) { return PP.API.post(`/api/premium/pockets/${pocket_id}/lock`, payload); },
+  unlockPocket(pocket_id) { return PP.API.post(`/api/premium/pockets/${pocket_id}/unlock`, {}); },
+  // Forecasting
+  getForecast(days = 30) { return PP.API.get('/api/premium/forecast', { days }); },
+  // Subscriptions
+  getDetectedSubscriptions() { return PP.API.get('/api/premium/subscriptions/detected'); },
+  updateDetectedSub(id, payload) { return PP.API.post(`/api/premium/subscriptions/detected/${id}/update`, payload); },
+  // Payment Approval
+  getApprovalSettings() { return PP.API.get('/api/premium/approval-mode/settings'); },
+  updateApprovalSettings(payload) { return PP.API.post('/api/premium/approval-mode/settings', payload); },
+  // Simulator
+  calculateSimulation(payload) { return PP.API.post('/api/premium/simulator/calculate', payload); },
+  applySimulation(payload) { return PP.API.post('/api/premium/simulator/apply', payload); },
+  // Routing
+  previewRouting(payload) { return PP.API.post('/api/premium/routing/preview', payload); },
+  // Concierge
+  askConcierge(question) { return PP.API.post('/api/premium/concierge/ask', { question }); }
 };
 
 

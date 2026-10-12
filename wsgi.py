@@ -17,6 +17,15 @@ from app import create_app
 # Create the master production WSGI application
 app = create_app()
 
+# Enable WhiteNoise static file serving if available
+try:
+    from whitenoise import WhiteNoise
+    static_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'app', 'static')
+    if os.path.exists(static_root):
+        app.wsgi_app = WhiteNoise(app.wsgi_app, root=static_root, prefix='static/')
+except ImportError:
+    pass
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     host = os.environ.get('HOST', '0.0.0.0')

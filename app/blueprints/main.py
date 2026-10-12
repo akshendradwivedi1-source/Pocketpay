@@ -31,6 +31,10 @@ def health():
     try:
         db.session.execute(text('SELECT 1'))
     except Exception as e:
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
         db_status = f'error: {str(e)}'
         
     return jsonify({

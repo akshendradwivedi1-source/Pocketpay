@@ -12,7 +12,6 @@ python -m pip install --upgrade pip
 echo "--> Installing project dependencies from requirements.txt..."
 pip install -r requirements.txt
 
-echo "--> Applying database migrations..."
-python -m flask db upgrade || true
+echo "--> Database migrations apply automatically during application startup."
 
 echo "--> Build succeeded! Ready for Gunicorn launch."

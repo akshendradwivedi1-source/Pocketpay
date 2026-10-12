@@ -146,6 +146,39 @@ PP.Dashboard = {
       }, 0);
     }
 
+    // ---------- Security Onboarding Prompt (if PIN not set) ----------
+    if (u.security_setup_required || (!u.security_setup_completed && !u.has_transaction_pin)) {
+      const secCard = PP.el('div', {
+        class: 'glass-card',
+        id: 'securitySetupDisclaimerCard',
+        style: 'background:linear-gradient(135deg,rgba(245,158,11,0.12) 0%,rgba(217,119,6,0.08) 100%);border:1px solid rgba(245,158,11,0.35);border-radius:18px;padding:16px 22px;display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;box-shadow:0 4px 20px rgba(245,158,11,0.1);'
+      });
+      secCard.innerHTML = `
+        <div style="display:flex;align-items:center;gap:1rem">
+          <div style="width:42px;height:42px;border-radius:12px;background:rgba(245,158,11,0.2);border:1px solid rgba(245,158,11,0.4);display:flex;align-items:center;justify-content:center;color:#f59e0b;font-size:20px">
+            <i data-lucide="shield-alert"></i>
+          </div>
+          <div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <h4 style="margin:0;font-size:0.95rem;font-weight:700;color:#fff">Security setup required</h4>
+              <span class="chip" style="background:rgba(245,158,11,0.25);color:#fde68a;font-size:0.68rem;padding:1px 6px">Action Needed</span>
+            </div>
+            <p style="margin:4px 0 0;color:var(--text-muted);font-size:0.82rem">Before using PocketPay transfers and other banking features, please create your required security credentials.</p>
+          </div>
+        </div>
+        <button class="btn btn-sm btn-primary" id="setupPinBannerBtn" style="background:#f59e0b;color:#18181b;font-weight:700;border:none">
+          <i data-lucide="shield-check"></i> Create Security Credentials
+        </button>
+      `;
+      wrap.appendChild(secCard);
+      setTimeout(() => {
+        secCard.querySelector('#setupPinBannerBtn')?.addEventListener('click', () => {
+          if (PP.Modals.securitySetup) PP.Modals.securitySetup();
+          else PP.Modals.setupPin();
+        });
+      }, 0);
+    }
+
     // ---------- Balance Card & Quick Actions ----------
     const totalNetWorth = b.total || ((b.wallet || 0) + (b.pockets || 0));
     const availableUnallocated = b.wallet || 0;
@@ -156,7 +189,7 @@ PP.Dashboard = {
         PP.el('div', {}, [
           PP.el('div', { class: 'balance-label' }, [
             PP.el('i', { 'data-lucide': 'wallet' }),
-            'Total Net Worth (Bank + Pockets)',
+            'Total Funds (Available + Pockets)',
             hasBank ? PP.el('span', { class: 'chip', style: 'margin-left:8px;font-size:0.65rem;background:rgba(99,102,241,0.2)' }, ['Demo Sandbox']) : null
           ].filter(Boolean)),
           PP.el('div', { class: 'balance-amount' }, [PP.el('span', { class: 'symbol' }, ['₹']), PP.fmt(totalNetWorth).replace('₹', '')]),
@@ -347,34 +380,55 @@ PP.Dashboard = {
             class: 'glass-card',
             style: 'border:1px solid var(--border);border-radius:16px;padding:1.25rem;display:flex;flex-direction:column;gap:0.75rem;background:var(--surface)'
           });
+          const isCompleted = Boolean(g.is_completed);
+          const hasUnreleased = isCompleted && Number(g.current_amount || 0) > 0;
+          const displayAmount = (isCompleted && g.released_amount) ? g.released_amount : g.current_amount;
+
           card.innerHTML = `
             <div style="display:flex;align-items:center;justify-content:space-between">
               <div style="display:flex;align-items:center;gap:0.6rem">
-                <div style="width:36px;height:36px;border-radius:10px;background:rgba(99,102,241,0.15);color:var(--accent);display:flex;align-items:center;justify-content:center">
-                  <i data-lucide="target"></i>
+                <div style="width:36px;height:36px;border-radius:10px;background:${isCompleted ? 'rgba(16,185,129,0.15)' : 'rgba(99,102,241,0.15)'};color:${isCompleted ? 'var(--success)' : 'var(--accent)'};display:flex;align-items:center;justify-content:center">
+                  <i data-lucide="${isCompleted ? 'award' : 'target'}"></i>
                 </div>
                 <div>
                   <h4 style="margin:0;font-size:0.95rem;font-weight:700">${g.name}</h4>
-                  <span style="font-size:0.75rem;color:var(--text-dim)">${g.category} ${g.days_remaining >= 0 ? `• ${g.days_remaining}d left` : ''}</span>
+                  <span style="font-size:0.75rem;color:var(--text-dim)">${g.category} ${isCompleted ? '• 🎉 Completed' : (g.days_remaining >= 0 ? `• ${g.days_remaining}d left` : '')}</span>
                 </div>
               </div>
-              <span class="chip ${g.is_completed ? 'success' : ''}" style="font-size:0.72rem">${pct}%</span>
+              <span class="chip ${isCompleted ? 'success' : ''}" style="font-size:0.72rem">${isCompleted ? '🎉 Goal Achieved' : pct + '%'}</span>
             </div>
             <div>
               <div style="display:flex;justify-content:space-between;font-size:0.82rem;margin-bottom:0.35rem">
-                <span style="color:var(--text-muted)">Saved: <b style="color:var(--text)">₹${g.current_amount.toLocaleString('en-IN')}</b></span>
-                <span style="color:var(--text-dim)">Target: ₹${g.target_amount.toLocaleString('en-IN')}</span>
+                <span style="color:var(--text-muted)">${isCompleted ? 'Released to Balance:' : 'Saved:'} <b style="color:${isCompleted ? 'var(--success)' : 'var(--text)'}">₹${Number(displayAmount || 0).toLocaleString('en-IN')}</b></span>
+                <span style="color:var(--text-dim)">Target: ₹${Number(g.target_amount || 0).toLocaleString('en-IN')}</span>
               </div>
               <div style="height:8px;border-radius:4px;background:rgba(255,255,255,0.08);overflow:hidden">
-                <div style="height:100%;width:${pct}%;background:linear-gradient(90deg, #6366f1, #10b981);border-radius:4px;transition:width 0.4s ease"></div>
+                <div style="height:100%;width:${isCompleted ? 100 : pct}%;background:linear-gradient(90deg, #6366f1, #10b981);border-radius:4px;transition:width 0.4s ease"></div>
               </div>
             </div>
             <div style="display:flex;gap:0.5rem;margin-top:0.25rem">
-              <button class="btn btn-sm btn-outline deposit-goal-btn" style="flex:1"><i data-lucide="plus-circle"></i> Add Money</button>
+              ${hasUnreleased
+                ? `<button class="btn btn-sm btn-success release-goal-btn" style="flex:1"><i data-lucide="unlock"></i> Release ₹${Number(g.current_amount).toLocaleString('en-IN')} to Balance</button>`
+                : (isCompleted
+                  ? `<div style="flex:1;text-align:center;font-size:0.78rem;color:var(--success);font-weight:600;padding:4px 0;background:rgba(16,185,129,0.08);border-radius:6px"><i data-lucide="check-circle" style="width:14px;height:14px;vertical-align:-2px;margin-right:4px"></i>Funds Added to Available Balance</div>`
+                  : `<button class="btn btn-sm btn-outline deposit-goal-btn" style="flex:1"><i data-lucide="plus-circle"></i> Add Money</button>`
+                )
+              }
               <button class="btn btn-sm btn-ghost edit-goal-btn" title="Edit"><i data-lucide="pencil"></i></button>
             </div>
           `;
           card.querySelector('.deposit-goal-btn')?.addEventListener('click', () => PP.Modals.depositGoal(g));
+          card.querySelector('.release-goal-btn')?.addEventListener('click', async () => {
+            try {
+              const res = await PP.GoalsAPI.release(g.id);
+              const rel = res?.released_amount || res?.data?.released_amount || g.current_amount;
+              PP.UI.toast('Funds Released', `₹${Number(rel).toLocaleString('en-IN')} released to your available balance!`, 'success');
+              await PP.loadState?.();
+              PP.renderView?.();
+            } catch (err) {
+              PP.UI.toast('Release Failed', err.message || 'Could not release goal funds', 'error');
+            }
+          });
           card.querySelector('.edit-goal-btn')?.addEventListener('click', () => PP.Modals.createGoal(g));
           containerEl.appendChild(card);
         });

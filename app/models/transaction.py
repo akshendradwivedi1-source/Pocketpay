@@ -59,6 +59,10 @@ class Transaction(db.Model):
     source_id = db.Column(db.String(100), nullable=True)
     destination_id = db.Column(db.String(100), nullable=True)
     reference_id = db.Column(db.String(100), nullable=True, index=True)
+    booking_type = db.Column(db.String(50), nullable=True)
+    external_booking_id = db.Column(db.String(100), nullable=True, index=True)
+    external_reference = db.Column(db.String(100), nullable=True, index=True)
+    external_payment_status = db.Column(db.String(50), nullable=True)
     failure_reason = db.Column(db.Text, nullable=True)
     
     category = db.Column(db.String(100), nullable=True)
@@ -132,6 +136,10 @@ class Transaction(db.Model):
             'source_id': self.source_id,
             'destination_id': self.destination_id,
             'reference_id': self.reference_id,
+            'booking_type': self.booking_type,
+            'external_booking_id': self.external_booking_id,
+            'external_reference': self.external_reference,
+            'external_payment_status': self.external_payment_status,
             'failure_reason': self.failure_reason,
             'category': self.category,
             'merchant': self.merchant,

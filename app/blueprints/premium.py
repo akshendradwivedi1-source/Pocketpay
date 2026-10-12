@@ -73,6 +73,54 @@ def verify_payment():
     return json_response(res, res.get('message', 'Premium activated successfully'))
 
 
+@bp.route('/pocketpay/initiate', methods=['POST'])
+@bp.route('/pay/pocketpay/initiate', methods=['POST'])
+@api_login_required
+def initiate_pocketpay_payment():
+    """
+    Step 1 of PocketPay payment method:
+    - Resolves PocketPay ID or UPI ID
+    - Verifies sufficient balance
+    - Generates and emails OTP to registered address
+    """
+    data = request.get_json() or {}
+    plan_id = str(data.get('plan_id') or data.get('plan') or 'monthly').strip().lower()
+    identifier = str(data.get('identifier') or data.get('pocketpay_id') or data.get('upi_id') or '').strip()
+
+    res = PremiumService.initiate_pocketpay_payment(current_user, plan_id=plan_id, identifier=identifier)
+    if not res.get('success'):
+        return error_response(res.get('error', 'Unable to initiate PocketPay payment'), res.get('status_code', 400), code=res.get('code'), data=res.get('data'))
+
+    return json_response(res, res.get('message', 'OTP sent to registered email'))
+
+
+@bp.route('/pocketpay/confirm', methods=['POST'])
+@bp.route('/pay/pocketpay/confirm', methods=['POST'])
+@api_login_required
+def confirm_pocketpay_payment():
+    """
+    Step 2 of PocketPay payment method:
+    - Verifies OTP
+    - Atomically checks balance and deducts subscription amount
+    - Records proper Transaction in ledger
+    - Activates Premium subscription
+    """
+    data = request.get_json() or {}
+    plan_id = str(data.get('plan_id') or data.get('plan') or 'monthly').strip().lower()
+    identifier = str(data.get('identifier') or data.get('pocketpay_id') or data.get('upi_id') or '').strip()
+    otp = str(data.get('otp') or '').strip()
+
+    if not otp:
+        return error_response("Verification OTP is required to complete payment", 400, code="MISSING_OTP")
+
+    res = PremiumService.confirm_pocketpay_payment(current_user, plan_id=plan_id, identifier=identifier, otp=otp)
+    if not res.get('success'):
+        return error_response(res.get('error', 'PocketPay payment failed'), res.get('status_code', 400), code=res.get('code'), data=res.get('data'))
+
+    return json_response(res, res.get('message', 'Premium activated successfully'))
+
+
+
 @bp.route('/webhook', methods=['POST'])
 def handle_webhook():
     """
